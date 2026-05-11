@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
+#ifndef XRTRANSPORT_VULKAN2_IMAGE_TYPE_H
+#define XRTRANSPORT_VULKAN2_IMAGE_TYPE_H
+
+enum class ImageType {
+    COLOR,
+    DEPTH_STENCIL
+};
+
+#endif // XRTRANSPORT_VULKAN2_IMAGE_TYPE_H

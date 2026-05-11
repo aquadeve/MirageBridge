@@ -1,0 +1,128 @@
+{
+	"folders": [
+		{
+			"name": "xrtransport",
+			"path": "."
+		},
+		{
+			"name": "monado",
+			"path": "../monado"
+		},
+		{
+			"name": "OpenXR-SDK-Source",
+			"path": "../OpenXR-SDK-Source"
+		}
+	],
+	"settings": {},
+	"tasks": {
+		"version": "2.0.0",
+		"tasks": [
+			{
+				"label": "Delay",
+				"command": "sleep",
+				"args": ["6"],
+				"type": "process",
+				"presentation": {
+					"reveal": "never"
+				}
+			},
+			{
+				"label": "Delete Monado Socket",
+				"command": "rm",
+				"args": ["-f", "/run/user/1000/monado_comp_ipc"],
+				"type": "process",
+				"presentation": {
+					"reveal": "never"
+				}
+			}
+		]
+	},
+	"launch": {
+		"version": "0.2.0",
+		"configurations": [
+			{
+				"name": "Launch Monado",
+				"type": "cppdbg",
+				"request": "launch",
+				"program": "${workspaceFolder:monado}/build/src/xrt/targets/service/monado-service",
+				"cwd": "${workspaceFolder:monado}/build/src/xrt/targets/service",
+				"externalConsole": false,
+				"environment": [
+					{
+						"name": "P_OVERRIDE_ACTIVE_CONFIG",
+						"value": "remote"
+					}
+				],
+				"preLaunchTask": "Delete Monado Socket"
+			},
+			{
+				"name": "Launch xrtransport server (Monado)",
+				"type": "cppdbg",
+				"request": "launch",
+				"program": "${workspaceFolder:xrtransport}/build/default/debug/install/server/xrtransport_server_main",
+				"cwd": "${workspaceFolder:xrtransport}/build/default/debug/install/server",
+				"externalConsole": false,
+				"environment": [
+					{
+						"name": "XR_RUNTIME_JSON",
+						"value": "${workspaceFolder:monado}/build/openxr_monado-dev.json"
+					},
+					{
+						"name": "XRTP_SERVER_FD_EXCHANGE_PATH",
+						"value": "/tmp/xrtransport/fd_exchange.sock"
+					},
+					{
+						"name": "XRTP_CLIENT_FD_EXCHANGE_PATH",
+						"value": "/tmp/xrtransport/fd_exchange.sock"
+					}
+				],
+				"args": ["unix", "/tmp/xrtransport/transport.sock"],
+				"preLaunchTask": "Delay"
+			},
+			{
+				"name": "Launch xrtransport server (Standalone)",
+				"type": "cppdbg",
+				"request": "launch",
+				"program": "${workspaceFolder:xrtransport}/build/default/debug/install/server/xrtransport_server_main",
+				"cwd": "${workspaceFolder:xrtransport}/build/default/debug/install/server",
+				"externalConsole": false,
+				"environment": [
+					{
+						"name": "XRTP_SERVER_FD_EXCHANGE_PATH",
+						"value": "/tmp/xrtransport/fd_exchange.sock"
+					},
+					{
+						"name": "XRTP_CLIENT_FD_EXCHANGE_PATH",
+						"value": "/data/local/tmp/xrtransport/fd_exchange.sock"
+					}
+				],
+				"args": ["unix", "/tmp/xrtransport/transport.sock"],
+			},
+			{
+				"name": "Launch hello_xr on xrtransport",
+				"type": "cppdbg",
+				"request": "launch",
+				"program": "${workspaceFolder:OpenXR-SDK-Source}/build/linux_debug/src/tests/hello_xr/hello_xr",
+				"cwd": "${workspaceFolder:OpenXR-SDK-Source}/build/linux_debug/src/tests/hello_xr",
+				"externalConsole": false,
+				"environment": [
+					{
+						"name": "XR_RUNTIME_JSON",
+						"value": "${workspaceFolder:xrtransport}/build/default/debug/install/client/xrtransport_client_manifest.json"
+					},
+					{
+						"name": "XRTRANSPORT_CONFIG_PATH",
+						"value": "${workspaceFolder:xrtransport}/example_client_config.json"
+					}
+				],
+				"args": ["-g", "Vulkan"]
+			}
+		],
+		"compounds": [
+			{
+				"name": "Launch Monado and xrtransport server",
+				"configurations": ["Launch Monado", "Launch xrtransport server (Monado)"]
+			}
+		]
+	}
+}

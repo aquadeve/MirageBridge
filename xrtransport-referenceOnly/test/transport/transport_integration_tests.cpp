@@ -1,0 +1,189 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_session.hpp>
+
+#include "xrtransport/transport/transport.h"
+#include "xrtransport/asio_compat.h"
+
+#include "asio.hpp"
+#include "asio/read.hpp"
+#include "asio/write.hpp"
+
+#include <thread>
+#include <chrono>
+#include <cstdint>
+#include <vector>
+#include <memory>
+#include <iostream>
+
+using namespace xrtransport;
+using asio::ip::tcp;
+
+// Type alias for TCP socket wrapped in DuplexStreamImpl
+using TcpSyncDuplexStream = SyncDuplexStreamImpl<tcp::socket>;
+
+class IntegrationTestFixture {
+private:
+    static std::unique_ptr<asio::io_context> io_context_;
+    static std::unique_ptr<Transport> transport_;
+    static constexpr uint16_t SERVER_PORT = 12345;
+
+public:
+    static void SetUpTestSuite() {
+        std::cout << "Connecting to transport server on port " << SERVER_PORT << "..." << std::endl;
+        std::cout << "Note: Make sure transport_server is running before running these tests!" << std::endl;
+
+        // Connect to server (assumes server is already running)
+        io_context_ = std::make_unique<asio::io_context>();
+        tcp::socket client_socket_(*io_context_);
+
+        try {
+            tcp::resolver resolver(*io_context_);
+            auto endpoints = resolver.resolve("localhost", std::to_string(SERVER_PORT));
+            asio::connect(client_socket_, endpoints);
+            client_socket_.set_option(tcp::no_delay(true));
+
+            std::cout << "Connected to server on port " << SERVER_PORT << std::endl;
+
+        } catch (const std::exception& e) {
+            std::cerr << "Failed to connect to server: " << e.what() << std::endl;
+            std::cerr << "Please start the server with: ./transport_server" << std::endl;
+            throw;
+        }
+
+        // Create Transport
+        transport_ = std::make_unique<Transport>(std::make_unique<TcpSyncDuplexStream>(std::move(client_socket_)));
+        transport_->start();
+    }
+
+    static void TearDownTestSuite() {
+        std::cout << "Cleaning up integration test..." << std::endl;
+
+        transport_->shutdown();
+    }
+
+    static Transport& GetTransport() {
+        return *transport_;
+    }
+
+    static asio::io_context& GetIoContext() {
+        return *io_context_;
+    }
+};
+
+// Static member definitions
+std::unique_ptr<asio::io_context> IntegrationTestFixture::io_context_;
+std::unique_ptr<Transport> IntegrationTestFixture::transport_;
+
+TEST_CASE_METHOD(IntegrationTestFixture, "Protocol 1: Simple Echo", "[integration][protocol1]") {
+    auto& transport = GetTransport();
+
+    uint32_t test_data = 0x12345678;
+    uint32_t received_data = 0;
+
+    // Send message 100 with test data
+    auto msg_out = transport.start_message(100);
+    asio::write(msg_out.buffer, asio::buffer(&test_data, sizeof(test_data)));
+    msg_out.flush();
+
+    // Receive response message 101
+    auto msg_in = transport.await_message(101);
+    asio::read(msg_in.buffer, asio::buffer(&received_data, sizeof(received_data)));
+
+    REQUIRE(received_data == test_data);
+}
+
+TEST_CASE_METHOD(IntegrationTestFixture, "Protocol 2: Variable Length Data", "[integration][protocol2]") {
+    auto& transport = GetTransport();
+
+    // Send message 102 (no payload)
+    auto msg_out = transport.start_message(102);
+    msg_out.flush();
+    // No data to write
+
+    // Receive response message 103
+    auto msg_in = transport.await_message(103);
+
+    // Read N
+    uint32_t n;
+    asio::read(msg_in.buffer, asio::buffer(&n, sizeof(n)));
+
+    REQUIRE(n >= 1);
+    REQUIRE(n <= 20);
+
+    // Read N zero bytes
+    std::vector<uint8_t> received_data(n);
+    asio::read(msg_in.buffer, asio::buffer(received_data));
+
+    // Verify all bytes are zero
+    for (size_t i = 0; i < n; ++i) {
+        REQUIRE(received_data[i] == 0);
+    }
+}
+
+TEST_CASE_METHOD(IntegrationTestFixture, "Protocol 3: Intermediate Packets", "[integration][protocol3]") {
+    auto& transport = GetTransport();
+
+    uint32_t test_input = 42;
+    uint32_t doubled_result = 0;
+    uint32_t echoed_result = 0;
+
+    transport.register_handler(105, [&](MessageLockIn msg_in){
+        asio::read(msg_in.buffer, asio::buffer(&doubled_result, sizeof(doubled_result)));
+    });
+
+    // Send message 104 with test input
+    auto msg_out = transport.start_message(104);
+    asio::write(msg_out.buffer, asio::buffer(&test_input, sizeof(test_input)));
+    msg_out.flush();
+
+    // Receive message 106 (echoed value)
+    // 105 packet should be received and handled while waiting
+    auto msg_in = transport.await_message(106);
+    asio::read(msg_in.buffer, asio::buffer(&echoed_result, sizeof(echoed_result)));
+
+    transport.unregister_handler(105);
+
+    REQUIRE(doubled_result == test_input * 2);
+    REQUIRE(echoed_result == test_input);
+}
+
+TEST_CASE_METHOD(IntegrationTestFixture, "Multiple Sequential Requests", "[integration][sequential]") {
+    auto& transport = GetTransport();
+
+    // Test multiple protocol 1 requests
+    for (int i = 1; i <= 3; ++i) {
+        uint32_t test_data = static_cast<uint32_t>(i * 1000);
+        uint32_t received_data = 0;
+
+        auto msg_out = transport.start_message(100);
+        asio::write(msg_out.buffer, asio::buffer(&test_data, sizeof(test_data)));
+        msg_out.flush();
+
+        auto msg_in = transport.await_message(101);
+        asio::read(msg_in.buffer, asio::buffer(&received_data, sizeof(received_data)));
+
+        REQUIRE(received_data == test_data);
+    }
+}
+
+// Custom main function to set up and tear down the test fixture
+int main(int argc, char* argv[]) {
+    Catch::Session session;
+
+    // Parse command line arguments
+    int returnCode = session.applyCommandLine(argc, argv);
+    if (returnCode != 0) return returnCode;
+
+    // Set up test suite
+    IntegrationTestFixture::SetUpTestSuite();
+
+    // Run tests
+    int result = session.run();
+
+    // Tear down test suite
+    IntegrationTestFixture::TearDownTestSuite();
+
+    return result;
+}
