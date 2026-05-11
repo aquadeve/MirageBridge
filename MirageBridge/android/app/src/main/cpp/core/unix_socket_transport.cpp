@@ -49,15 +49,29 @@ void UnixSocketTransport::SendFrame(const SBSFramePacket& frame) {
     SocketChunkHeader h{};
     h.magic = kSocketChunkMagic;
     h.type = kSocketChunkFrame;
-    h.size = sizeof(SBSFramePacket);
+    h.size = sizeof(SBSFrameHeader);
     SendRaw(&h, sizeof(h));
+    SendRaw(&frame.header, sizeof(frame.header));
 
-    const uint8_t* data = reinterpret_cast<const uint8_t*>(&frame);
-    size_t remaining = sizeof(SBSFramePacket);
+    const uint32_t payloadBytes = frame.header.payloadBytes > sizeof(frame.payload)
+        ? static_cast<uint32_t>(sizeof(frame.payload))
+        : frame.header.payloadBytes;
+    const uint8_t* data = frame.payload;
+    size_t remaining = payloadBytes;
     size_t offset = 0;
     while (remaining > 0) {
-        const size_t chunk = remaining > 60000 ? 60000 : remaining;
-        if (!SendRaw(data + offset, chunk)) {
+        const size_t chunk = remaining > kSocketFrameChunkBytes ? kSocketFrameChunkBytes : remaining;
+        SocketChunkHeader chunkHeader{};
+        chunkHeader.magic = kSocketChunkMagic;
+        chunkHeader.type = kSocketChunkFrameData;
+        chunkHeader.size = sizeof(SocketFrameDataHeader) + static_cast<uint32_t>(chunk);
+        SocketFrameDataHeader frameChunk{};
+        frameChunk.frameId = frame.header.frameId;
+        frameChunk.payloadOffset = static_cast<uint32_t>(offset);
+        frameChunk.payloadSize = static_cast<uint32_t>(chunk);
+        if (!SendRaw(&chunkHeader, sizeof(chunkHeader)) ||
+            !SendRaw(&frameChunk, sizeof(frameChunk)) ||
+            !SendRaw(data + offset, chunk)) {
             return;
         }
         offset += chunk;

@@ -41,8 +41,9 @@ int main() {
     std::printf("miragebridge-daemon listening on %s\n", sockPath);
 
     std::vector<uint8_t> pending;
-    uint32_t pendingType = 0;
-    uint32_t pendingSize = 0;
+    SBSFramePacket pendingFrame{};
+    bool pendingFrameValid = false;
+    uint32_t pendingPayloadBytes = 0;
 
     for (;;) {
         uint8_t buffer[65536];
@@ -52,27 +53,28 @@ int main() {
             continue;
         }
 
-        if (pending.empty()) {
-            if (n == static_cast<ssize_t>(sizeof(SocketChunkHeader))) {
-                SocketChunkHeader h{};
-                std::memcpy(&h, buffer, sizeof(h));
-                if (h.magic != kSocketChunkMagic || h.size == 0) {
-                    continue;
-                }
-                pendingType = h.type;
-                pendingSize = h.size;
-                pending.reserve(h.size);
+        if (pending.empty() && n == static_cast<ssize_t>(sizeof(SocketChunkHeader))) {
+            SocketChunkHeader h{};
+            std::memcpy(&h, buffer, sizeof(h));
+            if (h.magic != kSocketChunkMagic || h.size == 0) {
                 continue;
             }
+            pending.resize(h.size);
+            pendingPayloadBytes = h.type;
             continue;
         }
 
-        pending.insert(pending.end(), buffer, buffer + n);
-        if (pending.size() < pendingSize) {
+        if (pending.empty()) {
             continue;
         }
 
-        if (pendingType == kSocketChunkTracking && pendingSize == sizeof(XRPacket)) {
+        if (static_cast<size_t>(n) != pending.size()) {
+            pending.clear();
+            continue;
+        }
+        std::memcpy(pending.data(), buffer, static_cast<size_t>(n));
+
+        if (pendingPayloadBytes == kSocketChunkTracking && pending.size() == sizeof(XRPacket)) {
             XRPacket packet{};
             std::memcpy(&packet, pending.data(), sizeof(packet));
             if (packet.magic == kProtocolMagic) {
@@ -81,20 +83,34 @@ int main() {
                     static_cast<unsigned long long>(packet.frameId),
                     packet.controllerCount);
             }
-        } else if (pendingType == kSocketChunkFrame && pendingSize == sizeof(SBSFramePacket)) {
-            SBSFramePacket frame{};
-            std::memcpy(&frame, pending.data(), sizeof(frame));
-            if (frame.header.magic == kProtocolMagic) {
-                frames.Write(&frame, sizeof(frame));
-                std::printf("frame id=%llu payload=%u\n",
-                    static_cast<unsigned long long>(frame.header.frameId),
-                    frame.header.payloadBytes);
+        } else if (pendingPayloadBytes == kSocketChunkFrame && pending.size() == sizeof(SBSFrameHeader)) {
+            std::memset(&pendingFrame, 0, sizeof(pendingFrame));
+            std::memcpy(&pendingFrame.header, pending.data(), sizeof(SBSFrameHeader));
+            pendingFrameValid = pendingFrame.header.magic == kProtocolMagic;
+        } else if (pendingPayloadBytes == kSocketChunkFrameData &&
+                   pending.size() >= sizeof(SocketFrameDataHeader)) {
+            SocketFrameDataHeader chunk{};
+            std::memcpy(&chunk, pending.data(), sizeof(chunk));
+            const uint8_t* chunkPayload = pending.data() + sizeof(chunk);
+            const uint32_t chunkBytes = chunk.payloadSize;
+            const bool chunkSizeMatches = pending.size() == sizeof(chunk) + chunkBytes;
+            const bool frameIdMatches = pendingFrameValid && chunk.frameId == pendingFrame.header.frameId;
+            const bool chunkInRange = chunk.payloadOffset <= sizeof(pendingFrame.payload) &&
+                chunkBytes <= sizeof(pendingFrame.payload) - chunk.payloadOffset;
+            if (chunkSizeMatches && frameIdMatches && chunkInRange) {
+                std::memcpy(pendingFrame.payload + chunk.payloadOffset, chunkPayload, chunkBytes);
+                const uint32_t received = chunk.payloadOffset + chunkBytes;
+                if (received >= pendingFrame.header.payloadBytes) {
+                    frames.Write(&pendingFrame, sizeof(pendingFrame));
+                    std::printf("frame id=%llu payload=%u\n",
+                        static_cast<unsigned long long>(pendingFrame.header.frameId),
+                        pendingFrame.header.payloadBytes);
+                    pendingFrameValid = false;
+                }
             }
         }
 
         pending.clear();
-        pendingType = 0;
-        pendingSize = 0;
     }
 
     close(sock);

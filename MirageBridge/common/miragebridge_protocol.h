@@ -16,6 +16,9 @@ constexpr uint32_t kSbsBytes = kSbsWidth * kSbsHeight * 4;
 constexpr uint32_t kSocketChunkMagic = 0x4D425343;
 constexpr uint32_t kSocketChunkTracking = 1;
 constexpr uint32_t kSocketChunkFrame = 2;
+constexpr uint32_t kSocketChunkFrameData = 3;
+
+constexpr uint32_t kSocketFrameChunkBytes = 60000;
 
 #pragma pack(push, 1)
 struct EyePacket {
@@ -73,6 +76,12 @@ struct SocketChunkHeader {
     uint32_t magic;
     uint32_t type;
     uint32_t size;
+};
+
+struct SocketFrameDataHeader {
+    uint64_t frameId;
+    uint32_t payloadOffset;
+    uint32_t payloadSize;
 };
 
 struct RingHeader {
