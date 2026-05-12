@@ -4,6 +4,8 @@ project(miragebridge_termux LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+find_package(Threads REQUIRED)
+
 add_subdirectory(common)
 add_subdirectory(miragebridge-daemon)
 add_subdirectory(pose-client)

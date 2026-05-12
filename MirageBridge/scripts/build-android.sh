@@ -10,4 +10,8 @@ if [ -z "$ANDROID_SDK_ROOT" ]; then
 fi
 
 cd "$ANDROID_DIR"
-./gradlew assembleDebug
+if [ -x ./gradlew ]; then
+  ./gradlew assembleDebug
+else
+  gradle assembleDebug
+fi

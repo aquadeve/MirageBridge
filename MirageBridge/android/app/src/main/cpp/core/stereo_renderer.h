@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-#include "../../../../common/miragebridge_protocol.h"
+#include "miragebridge_protocol.h"
 
 #include "core/egl_capture_pipeline.h"
 

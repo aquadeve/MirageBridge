@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "../../../../common/miragebridge_protocol.h"
+#include "miragebridge_protocol.h"
 
 namespace miragebridge {
 
@@ -14,6 +14,10 @@ public:
     void Shutdown();
     bool PushTracking(const XRPacket& packet);
     bool PushFrame(const SBSFramePacket& frame);
+    int TrackingFd() const;
+    int FrameFd() const;
+    size_t TrackingSize() const;
+    size_t FrameSize() const;
 
 private:
     struct Segment {
@@ -24,7 +28,7 @@ private:
         uint8_t* payload = nullptr;
     };
 
-    bool CreateSegment(const char* name, uint32_t slotCount, uint32_t slotSize, Segment* segment);
+    bool CreateSegment(const char* name, uint32_t kind, uint32_t slotCount, uint32_t payloadSize, Segment* segment);
     bool PushPacket(const void* data, size_t size, Segment* segment);
 
     Segment tracking_;

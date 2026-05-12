@@ -1,0 +1,5 @@
+android/.gradle/
+android/build/
+android/app/.cxx/
+android/app/build/
+termux/build/

@@ -18,15 +18,19 @@ add_library(miragebridge SHARED
 target_include_directories(miragebridge PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/core
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../../../common
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../common
 )
 
-if(DEFINED GVR_SDK_ROOT)
+if(DEFINED GVR_SDK_EXTRACT_DIR AND EXISTS "${GVR_SDK_EXTRACT_DIR}/headers")
     target_include_directories(miragebridge PRIVATE
-        ${GVR_SDK_ROOT}/libraries/headers
-        ${GVR_SDK_ROOT}/samples/ndk-hellovr/src/main/jni
+        ${GVR_SDK_EXTRACT_DIR}/headers
     )
     target_compile_definitions(miragebridge PRIVATE MIRAGEBRIDGE_ENABLE_GVR=1)
+
+    add_library(gvr SHARED IMPORTED)
+    set_target_properties(gvr PROPERTIES
+        IMPORTED_LOCATION "${GVR_SDK_EXTRACT_DIR}/jni/${ANDROID_ABI}/libgvr.so"
+    )
 endif()
 
 find_library(log-lib log)
@@ -40,3 +44,7 @@ target_link_libraries(miragebridge
     ${egl-lib}
     ${gles-lib}
 )
+
+if(TARGET gvr)
+    target_link_libraries(miragebridge gvr)
+endif()

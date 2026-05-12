@@ -6,6 +6,8 @@
 
 #include <cstring>
 
+#include "ring_buffer.h"
+
 namespace miragebridge {
 
 bool RingWriter::Create(const char* name, uint32_t slotCount, uint32_t slotSize) {
@@ -14,7 +16,7 @@ bool RingWriter::Create(const char* name, uint32_t slotCount, uint32_t slotSize)
         return false;
     }
 
-    size_ = sizeof(RingHeader) + static_cast<size_t>(slotCount) * slotSize;
+    size_ = RingBytes(slotCount, slotSize);
     if (ftruncate(fd_, static_cast<off_t>(size_)) != 0) {
         Close();
         return false;
@@ -27,15 +29,10 @@ bool RingWriter::Create(const char* name, uint32_t slotCount, uint32_t slotSize)
         return false;
     }
 
-    std::memset(map_, 0, size_);
     header_ = reinterpret_cast<RingHeader*>(map_);
     payload_ = reinterpret_cast<uint8_t*>(map_) + sizeof(RingHeader);
-    header_->magic = kProtocolMagic;
-    header_->version = kProtocolVersion;
-    header_->slotCount = slotCount;
-    header_->slotSize = slotSize;
-    header_->writeSeq.store(0, std::memory_order_relaxed);
-    header_->readSeq.store(0, std::memory_order_relaxed);
+    const uint32_t kind = slotSize == sizeof(XRPacket) ? kRingKindTracking : kRingKindFrame;
+    InitializeRing(map_, kind, slotCount, slotSize);
     return true;
 }
 
@@ -54,17 +51,7 @@ void RingWriter::Close() {
 }
 
 bool RingWriter::Write(const void* data, size_t size) {
-    if (!header_ || !payload_ || !data || size > header_->slotSize) {
-        return false;
-    }
-
-    const uint64_t writeSeq = header_->writeSeq.load(std::memory_order_relaxed);
-    const uint32_t slot = static_cast<uint32_t>(writeSeq % header_->slotCount);
-    uint8_t* dst = payload_ + static_cast<size_t>(slot) * header_->slotSize;
-    std::memset(dst, 0, header_->slotSize);
-    std::memcpy(dst, data, size);
-    header_->writeSeq.store(writeSeq + 1, std::memory_order_release);
-    return true;
+    return RingWrite(header_, payload_, data, size);
 }
 
 }

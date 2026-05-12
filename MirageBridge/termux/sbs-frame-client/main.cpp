@@ -1,5 +1,6 @@
 #include <chrono>
 #include <cstdio>
+#include <memory>
 #include <thread>
 
 #include "transport_reader.h"
@@ -15,20 +16,20 @@ int main() {
     }
 
     uint64_t seq = 0;
+    auto frame = std::make_unique<SBSFramePacket>();
     for (;;) {
-        SBSFramePacket frame{};
-        if (reader.ReadLatest(&frame, sizeof(frame), &seq)) {
-            const auto& header = frame.header;
+        if (reader.ReadLatest(frame.get(), sizeof(*frame), &seq)) {
+            const auto& header = frame->header;
             std::printf("frame=%llu dims=%ux%u stride=%u payload=%u px0=%u,%u,%u,%u\n",
                 static_cast<unsigned long long>(header.frameId),
                 header.sbsWidth,
                 header.sbsHeight,
                 header.strideBytes,
                 header.payloadBytes,
-                frame.payload[0],
-                frame.payload[1],
-                frame.payload[2],
-                frame.payload[3]);
+                frame->payload[0],
+                frame->payload[1],
+                frame->payload[2],
+                frame->payload[3]);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }

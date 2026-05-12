@@ -12,6 +12,8 @@ public:
     bool Open(const char* name, size_t expectedSlotSize);
     void Close();
     bool ReadLatest(void* outData, size_t outSize, uint64_t* outSeq);
+    bool ReadSequence(uint64_t sequence, void* outData, size_t outSize);
+    uint64_t WriteSequence() const;
 
 private:
     int fd_ = -1;

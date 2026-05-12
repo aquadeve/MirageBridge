@@ -4,6 +4,7 @@ add_executable(miragebridge-daemon
 
 target_link_libraries(miragebridge-daemon
     miragebridge_common
+    Threads::Threads
 )
 
 target_include_directories(miragebridge-daemon PRIVATE

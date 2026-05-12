@@ -4,8 +4,7 @@ buildscript {
         mavenCentral()
     }
     dependencies {
-        classpath "com.android.tools.build:gradle:8.2.2"
-        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22"
+        classpath "com.android.tools.build:gradle:9.1.0"
     }
 }
 
@@ -16,6 +15,8 @@ allprojects {
         maven {
             url "https://maven.google.com"
         }
-        jcenter()
+        flatDir {
+            dirs rootProject.file("../../gvr-android-sdk/libraries")
+        }
     }
 }

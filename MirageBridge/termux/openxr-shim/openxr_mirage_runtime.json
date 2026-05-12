@@ -1,0 +1,8 @@
+{
+  "file_format_version": "1.0.0",
+  "runtime": {
+    "name": "MirageBridge Prototype",
+    "library_path": "libopenxr_mirage.so",
+    "api_version": "1.0"
+  }
+}

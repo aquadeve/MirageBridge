@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include <EGL/egl.h>
+
 namespace miragebridge {
 
 class EGLCapturePipeline {
@@ -15,6 +17,13 @@ public:
 private:
     uint32_t width_ = 0;
     uint32_t height_ = 0;
+    bool CreateTexture(uint32_t width, uint32_t height, uint32_t* texture);
+    bool AttachFramebuffer(uint32_t framebuffer, uint32_t texture);
+    bool MakeCurrent();
+
+    EGLDisplay display_ = EGL_NO_DISPLAY;
+    EGLContext context_ = EGL_NO_CONTEXT;
+    EGLSurface surface_ = EGL_NO_SURFACE;
     uint32_t leftFbo_ = 0;
     uint32_t rightFbo_ = 0;
     uint32_t sbsFbo_ = 0;
