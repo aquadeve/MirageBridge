@@ -60,3 +60,5 @@ MirageBridge uses an abstract Android Unix socket named `@miragebridge.termux`, 
 ## Prototype Boundaries
 
 This is not a full Khronos-conformant OpenXR runtime yet. The primary public SDK is intentionally non-OpenXR: it is a lightweight C ABI plus Luau-facing runtime for embedded engines. `libopenxr_mirage.so` now negotiates with the Khronos loader and can bring up minimal instance/session/frame/swapchain flow, but real compositor presentation, hardware video encode, audio routing, Vulkan external memory, and Android-side presentation of client-submitted frames still need on-device backend work.
+
+Code is most importantly made with AI and the openxr shim needs a lot more fixes!!!
