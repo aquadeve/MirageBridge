@@ -80,22 +80,41 @@ Expected early signals:
 - increasing pose frame ids
 - increasing SBS frame ids
 
-## OpenXR Shim Experiments
+## OpenXR Runtime Experiments
 
-The shim is built as:
+The OpenXR runtime is built as:
 
 ```text
 termux/build/openxr-shim/libopenxr_mirage.so
 ```
 
-It is a prototype entry-point shim, not a full OpenXR loader runtime. Early tests should use direct `dlopen`/`dlsym` or simple apps that call the implemented functions:
+The CMake build emits a loader manifest with an absolute library path:
 
-- `xrGetInstanceProcAddr`
-- `xrEnumerateViewConfigurationViews`
-- `xrWaitFrame`
-- `xrBeginFrame`
-- `xrEndFrame`
-- `xrLocateViews`
+```text
+termux/build/openxr-shim/openxr_mirage_runtime.json
+```
+
+Use it with the Khronos loader:
+
+```bash
+export XR_RUNTIME_JSON="$PWD/termux/build/openxr-shim/openxr_mirage_runtime.json"
+XR_LOADER_DEBUG=all hello_xr -g OpenGL
+```
+
+On Mirage Solo/Termux, prefer the OpenGL ES path when the local `hello_xr` build supports it:
+
+```bash
+XR_LOADER_DEBUG=all hello_xr -g OpenGLES
+```
+
+Basic runtime checks:
+
+```bash
+nm -D termux/build/openxr-shim/libopenxr_mirage.so | grep xrNegotiateLoaderRuntimeInterface
+openxr_runtime_list
+```
+
+Current support is intentionally minimal: loader negotiation, instance/session lifecycle, stereo view configuration, reference spaces, OpenGL/OpenGL ES swapchain image handles, frame pacing, view location, and action stubs for hello_xr bring-up. Real compositor presentation, controller actions, Vulkan, and client frame transport into the Android Daydream compositor remain future backend work.
 
 ## Non-OpenXR SDK
 

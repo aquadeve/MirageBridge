@@ -36,7 +36,7 @@ StereoRenderer
 - `miragebridge-daemon` binds the abstract socket, receives Android FDs, maps the remote rings read-only, and mirrors tracking/frame data into POSIX shm names `/miragebridge_tracking` and `/miragebridge_frames`.
 - `pose-client` reads the latest `XRPacket` and prints pose, yaw, and velocity as a text pose visualizer.
 - `sbs-frame-client` reads the latest SBS frame header and first pixel for transport sanity checks.
-- `openxr-shim` exposes `xrWaitFrame`, `xrBeginFrame`, `xrEndFrame`, `xrLocateViews`, and a minimal `xrGetInstanceProcAddr` dispatch surface.
+- `openxr-shim` is now a minimal Khronos-loader-compatible runtime. It exports `xrNegotiateLoaderRuntimeInterface`, routes core functions through `xrGetInstanceProcAddr`, creates instances/sessions/reference spaces/swapchains, reports stereo view configuration, and maps `xrWaitFrame`/`xrLocateViews` to the shared MirageBridge pose stream with a safe identity fallback.
 - `mirage_runtime` is the non-OpenXR SDK shared/static library. It reads pose/frame rings, exposes a C ABI, queues events, and writes client-submitted SBS/audio packets into local submission rings.
 - `vr.so` is the native Luau module over the same C ABI.
 
@@ -65,4 +65,5 @@ This makes language bindings straightforward and lets simple engines integrate o
 
 - `gvr-android-sdk/samples/ndk-hellovr`: GVR non-owned context wrapping, `GetHeadSpaceFromStartSpaceTransform`, recommended viewports, eye matrices, controller polling, async reprojection.
 - `monado-referenceOnly/src/xrt/state_trackers/oxr`: OpenXR frame call ordering and view-state flag semantics.
+- `OpenXR_Simulator-referenceOnly`: OpenXR loader negotiation, runtime manifest layout, dispatch routing, and minimal runtime bring-up patterns.
 - `xrtransport-referenceOnly/src/server` and `include/xrtransport`: Unix socket setup, protocol handshakes, and transport/module layering patterns.
