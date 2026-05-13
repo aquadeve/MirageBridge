@@ -1,4 +1,0 @@
-{
-    "transport_type": "unix",
-    "unix_path": "/tmp/xrtransport/transport.sock"
-}

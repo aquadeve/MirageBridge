@@ -1,8 +1,0 @@
-.vscode
-__pycache__/
-**/build/
-venv
-**/jniLibs/**/*.so
-.gradle
-.idea
-local.properties
