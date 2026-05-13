@@ -13,6 +13,7 @@ MirageBridge is a research-grade prototype for turning a Lenovo Mirage Solo into
 - Offscreen EGL/GLES3 pbuffer renderer that renders left and right eye FBOs and blits them into an SBS frame buffer.
 - Termux daemon that maps Android shared-memory FDs and mirrors them into POSIX shm for local readers.
 - `pose-client`, `sbs-frame-client`, and `libopenxr_mirage.so` prototype shim.
+- Non-OpenXR embedding SDK with C ABI, C++ wrapper, native Luau module, examples, and smoke tests.
 
 ## Repository Layout
 
@@ -21,6 +22,7 @@ MirageBridge/
   android/                 Android app and native bridge service
   common/                  Binary protocol and shared-memory ring helpers
   termux/                  Daemon, clients, and OpenXR shim
+  sdk/include/             Public C/C++ embedding SDK headers
   scripts/                 Build/deploy helpers
   docs/                    Architecture, protocol, deployment, and RE notes
 ```
@@ -40,16 +42,20 @@ Outputs:
 - Android APK: `android/app/build/outputs/apk/debug/app-debug.apk`
 - Termux binaries: `termux/build/miragebridge-daemon/miragebridge-daemon`, `pose-client`, `sbs-frame-client`
 - OpenXR shim: `termux/build/openxr-shim/libopenxr_mirage.so`
+- Runtime SDK: `termux/build/sdk/libmirage_runtime.so`, `libmirage_runtime.a`, `vr.so`
+- SDK examples: `termux/build/examples/mbr-pose-viewer`, `mbr-submit-sbs`
 
 ## Runtime Order
 
 1. Start Termux and run `miragebridge-daemon`.
 2. Install and launch the Android APK.
 3. Run `pose-client` or `sbs-frame-client` in Termux.
-4. For shim experiments, preload or directly link `libopenxr_mirage.so` with simple OpenXR callers that use the implemented frame/view entry points.
+4. For non-OpenXR applications, link `libmirage_runtime.so` or use the single C header in `sdk/include/mirage_runtime.h`.
+5. For Luau hosts, add `termux/build/sdk` to the native module search path and `require("vr")`.
+6. For shim experiments, preload or directly link `libopenxr_mirage.so` with simple OpenXR callers that use the implemented frame/view entry points.
 
 MirageBridge uses an abstract Android Unix socket named `@miragebridge.termux`, so it does not depend on Termux private app-data paths or root-only filesystem access.
 
 ## Prototype Boundaries
 
-This is not a full Khronos-conformant OpenXR runtime. `libopenxr_mirage.so` intentionally implements the narrow frame loop/view-location surface needed for early Linux-side experiments. Swapchain import, compositor replacement, protected Daydream compositor capture, and Vulkan/Mesa presentation remain future work.
+This is not a full Khronos-conformant OpenXR runtime. The primary public SDK is intentionally non-OpenXR: it is a lightweight C ABI plus Luau-facing runtime for embedded engines. `libopenxr_mirage.so` remains a narrow compatibility shim. Hardware video encode, audio routing, Vulkan external memory, and Android-side presentation of client-submitted frames are specified and scaffolded, but still need on-device backend work.

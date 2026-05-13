@@ -18,12 +18,44 @@ constexpr uint32_t kSocketChunkMagic = 0x4D425343;
 constexpr uint32_t kSocketChunkSharedMemory = 1;
 constexpr uint32_t kSocketChunkTracking = 2;
 constexpr uint32_t kSocketChunkFrame = 3;
+constexpr uint32_t kSocketChunkClientFrame = 4;
+constexpr uint32_t kSocketChunkAudio = 5;
+constexpr uint32_t kSocketChunkInput = 6;
+constexpr uint32_t kSocketChunkRuntimeEvent = 7;
 
 constexpr uint32_t kRingKindTracking = 1;
 constexpr uint32_t kRingKindFrame = 2;
+constexpr uint32_t kRingKindClientFrame = 3;
+constexpr uint32_t kRingKindAudioOut = 4;
+constexpr uint32_t kRingKindAudioIn = 5;
+constexpr uint32_t kRingKindRuntimeEvent = 6;
 
 constexpr const char* kAndroidControlSocketName = "miragebridge.termux";
 constexpr uint32_t kSocketMaxPayload = 60 * 1024;
+constexpr uint32_t kAudioMaxFrames = 960;
+constexpr uint32_t kAudioMaxChannels = 2;
+constexpr uint32_t kAudioMaxBytes = kAudioMaxFrames * kAudioMaxChannels * sizeof(float);
+
+enum RuntimeEventType : uint32_t {
+    kRuntimeEventNone = 0,
+    kRuntimeEventConnected = 1,
+    kRuntimeEventDisconnected = 2,
+    kRuntimeEventPose = 3,
+    kRuntimeEventFrame = 4,
+    kRuntimeEventController = 5,
+    kRuntimeEventAudioUnderrun = 6,
+    kRuntimeEventTransportWarning = 7,
+};
+
+enum RuntimeCommandType : uint32_t {
+    kRuntimeCommandNone = 0,
+    kRuntimeCommandSubmitSbsFrame = 1,
+    kRuntimeCommandSubmitEncodedVideo = 2,
+    kRuntimeCommandSubmitAudio = 3,
+    kRuntimeCommandHapticPulse = 4,
+    kRuntimeCommandSetBitrate = 5,
+    kRuntimeCommandSetFramePacing = 6,
+};
 
 #pragma pack(push, 1)
 struct EyePacket {
@@ -76,6 +108,52 @@ struct SBSFrameHeader {
 struct SBSFramePacket {
     SBSFrameHeader header;
     uint8_t payload[kSbsBytes];
+};
+
+struct EncodedVideoPacket {
+    uint32_t magic;
+    uint32_t version;
+    uint64_t frameId;
+    uint64_t captureNs;
+    uint64_t targetDisplayNs;
+    uint32_t codec;
+    uint32_t flags;
+    uint32_t width;
+    uint32_t height;
+    uint32_t payloadBytes;
+};
+
+struct AudioPacket {
+    uint32_t magic;
+    uint32_t version;
+    uint64_t packetId;
+    uint64_t monotonicNs;
+    uint32_t sampleRate;
+    uint32_t channels;
+    uint32_t frameCount;
+    uint32_t format;
+    uint32_t payloadBytes;
+    uint8_t payload[kAudioMaxBytes];
+};
+
+struct RuntimeEventPacket {
+    uint32_t magic;
+    uint32_t version;
+    uint64_t eventId;
+    uint64_t monotonicNs;
+    uint32_t type;
+    uint32_t code;
+    uint64_t value;
+    float data[8];
+};
+
+struct RuntimeCommandPacket {
+    uint32_t magic;
+    uint32_t version;
+    uint64_t commandId;
+    uint64_t monotonicNs;
+    uint32_t type;
+    uint32_t payloadBytes;
 };
 
 struct SocketChunkHeader {
@@ -138,12 +216,31 @@ struct alignas(64) RingSlotHeader {
 struct TransportConfig {
     const char* trackingName;
     const char* frameName;
+    const char* clientFrameName;
+    const char* audioOutName;
+    const char* audioInName;
+    const char* runtimeEventName;
     uint32_t trackingSlots;
     uint32_t frameSlots;
+    uint32_t clientFrameSlots;
+    uint32_t audioSlots;
+    uint32_t eventSlots;
 };
 
 inline TransportConfig DefaultConfig() {
-    return {"/miragebridge_tracking", "/miragebridge_frames", 512, 8};
+    return {
+        "/miragebridge_tracking",
+        "/miragebridge_frames",
+        "/miragebridge_client_frames",
+        "/miragebridge_audio_out",
+        "/miragebridge_audio_in",
+        "/miragebridge_events",
+        512,
+        8,
+        4,
+        64,
+        128,
+    };
 }
 
 inline constexpr size_t AlignUp(size_t value, size_t alignment) {

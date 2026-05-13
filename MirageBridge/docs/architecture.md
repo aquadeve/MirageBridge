@@ -37,6 +37,8 @@ StereoRenderer
 - `pose-client` reads the latest `XRPacket` and prints pose, yaw, and velocity as a text pose visualizer.
 - `sbs-frame-client` reads the latest SBS frame header and first pixel for transport sanity checks.
 - `openxr-shim` exposes `xrWaitFrame`, `xrBeginFrame`, `xrEndFrame`, `xrLocateViews`, and a minimal `xrGetInstanceProcAddr` dispatch surface.
+- `mirage_runtime` is the non-OpenXR SDK shared/static library. It reads pose/frame rings, exposes a C ABI, queues events, and writes client-submitted SBS/audio packets into local submission rings.
+- `vr.so` is the native Luau module over the same C ABI.
 
 ## Threading And Timing
 
@@ -44,6 +46,20 @@ StereoRenderer
 - Frame loop target: 72 Hz (`13.888 ms` period).
 - GVR prediction horizon: one 72 Hz display period.
 - The shared-memory ring is single-writer/multi-reader friendly. Each slot has begin/end sequence values so readers can reject torn packets without locks.
+
+## SDK Layer
+
+The SDK deliberately sits below OpenXR:
+
+```text
+Native app / engine / Luau script
+  -> mirage_runtime C ABI
+  -> POSIX shm rings or future socket/UDP backend
+  -> miragebridge-daemon
+  -> Android Daydream service
+```
+
+This makes language bindings straightforward and lets simple engines integrate only the pieces they need: pose, controller, frame timing, SBS submission, audio, and events.
 
 ## Reference Material Used
 

@@ -6,8 +6,11 @@ MirageBridge uses two ring buffers:
 
 - Tracking ring: `XRPacket`, 512 slots by default.
 - Frame ring: `SBSFramePacket`, 8 slots by default.
+- Client frame submission ring: `SBSFramePacket`, 4 slots by default.
+- Audio out/in rings: `AudioPacket`, 64 slots by default.
+- Runtime event ring: `RuntimeEventPacket`, 128 slots by default.
 
-Android owns the first copy of each ring in `ASharedMemory`/ashmem. Termux receives those FDs and mirrors the latest data into POSIX shared memory so independent Termux processes can open them with `shm_open`.
+Android owns the first copy of headset-originated rings in `ASharedMemory`/ashmem. Termux receives those FDs and mirrors the latest data into POSIX shared memory so independent Termux processes can open them with `shm_open`. Client-originated rings are created by the SDK/daemon in POSIX shm and are reserved for frame/audio/input submission back to the Android service.
 
 ## Ring Header
 
@@ -68,5 +71,22 @@ Message types:
 - `kSocketChunkSharedMemory`: sends two FDs and `SocketSegmentInfo` descriptors.
 - `kSocketChunkTracking`: raw tracking fallback chunks.
 - `kSocketChunkFrame`: raw SBS frame fallback chunks.
+- `kSocketChunkClientFrame`: client-submitted SBS chunks.
+- `kSocketChunkAudio`: PCM audio chunks.
+- `kSocketChunkInput`: input/haptic commands.
+- `kSocketChunkRuntimeEvent`: runtime events.
 
 The control socket uses `SOCK_SEQPACKET` so each control/chunk message is preserved as a packet. Shared-memory FDs are transferred with `SCM_RIGHTS`.
+
+## Runtime Command Surface
+
+`RuntimeCommandPacket` is the base for command streams:
+
+- `kRuntimeCommandSubmitSbsFrame`
+- `kRuntimeCommandSubmitEncodedVideo`
+- `kRuntimeCommandSubmitAudio`
+- `kRuntimeCommandHapticPulse`
+- `kRuntimeCommandSetBitrate`
+- `kRuntimeCommandSetFramePacing`
+
+The current SDK writes raw submitted SBS frames to `/miragebridge_client_frames` and PCM audio to `/miragebridge_audio_out`. Android-side consumption is the next backend step.
