@@ -4,12 +4,13 @@ plugins {
 
 android {
     namespace 'com.miragebridge'
-    compileSdk 34
+    compileSdk 28
 
     defaultConfig {
         applicationId "com.miragebridge"
         minSdk 26
-        targetSdk 34
+        targetSdk 26
+
         versionCode 1
         versionName "0.1.0"
 
@@ -17,7 +18,7 @@ android {
             cmake {
                 cppFlags "-std=c++17 -fexceptions -frtti"
                 arguments "-DANDROID_STL=c++_shared",
-                    "-DGVR_SDK_EXTRACT_DIR=${buildDir}/gvr-base"
+                        "-DGVR_SDK_EXTRACT_DIR=${buildDir}/gvr-base"
             }
         }
 
@@ -30,9 +31,12 @@ android {
         debug {
             debuggable true
         }
+
         release {
             minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            proguardFiles getDefaultProguardFile(
+                    'proguard-android-optimize.txt'
+            ), 'proguard-rules.pro'
         }
     }
 
@@ -44,12 +48,13 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
     }
 }
 
-def gvrBaseAar = rootProject.file("../../gvr-android-sdk/libraries/sdk-base-1.200.0.aar")
+def gvrBaseAar = rootProject.file("../../gvr-android-sdk/libraries/sdk-base-1.190.0.aar")
+
 def gvrExtractDir = layout.buildDirectory.dir("gvr-base")
 
 tasks.register("extractGvrBaseAar", Copy) {
@@ -61,12 +66,6 @@ tasks.named("preBuild").configure {
     dependsOn("extractGvrBaseAar")
 }
 
-afterEvaluate {
-    tasks.matching { it.name.startsWith("configureCMake") || it.name.startsWith("buildCMake") || it.name.startsWith("externalNativeBuild") }.configureEach {
-        dependsOn("extractGvrBaseAar")
-    }
-}
-
 dependencies {
-    implementation(name: "sdk-base-1.200.0", ext: "aar")
+    implementation(name: "sdk-base-1.190.0", ext: "aar")
 }
