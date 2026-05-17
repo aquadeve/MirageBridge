@@ -17,6 +17,10 @@ public final class MainActivity extends Activity {
     private GLSurfaceView surfaceView;
     private Intent bridgeIntent;
 
+    private native void nativeOnSurfaceCreated();
+    private native void nativeOnSurfaceChanged(int width, int height);
+    private native void nativeDrawFrame();
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -29,13 +33,19 @@ public final class MainActivity extends Activity {
         surfaceView.setPreserveEGLContextOnPause(true);
         surfaceView.setRenderer(new GLSurfaceView.Renderer() {
             @Override
-            public void onSurfaceCreated(GL10 gl, EGLConfig config) {}
+            public void onSurfaceCreated(GL10 gl, EGLConfig config) {
+                nativeOnSurfaceCreated();
+            }
 
             @Override
-            public void onSurfaceChanged(GL10 gl, int width, int height) {}
+            public void onSurfaceChanged(GL10 gl, int width, int height) {
+                nativeOnSurfaceChanged(width, height);
+            }
 
             @Override
-            public void onDrawFrame(GL10 gl) {}
+            public void onDrawFrame(GL10 gl) {
+                nativeDrawFrame();
+            }
         });
         gvrLayout.setPresentationView(surfaceView);
         setContentView(gvrLayout);
@@ -88,5 +98,9 @@ public final class MainActivity extends Activity {
                         | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                         | View.SYSTEM_UI_FLAG_FULLSCREEN
                         | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+    }
+
+    static {
+        System.loadLibrary("miragebridge");
     }
 }

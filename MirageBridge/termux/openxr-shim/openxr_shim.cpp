@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <cstring>
 #include <dlfcn.h>
+#include <cmath>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -14,6 +16,7 @@
 
 #include "miragebridge_protocol.h"
 #include "transport_reader.h"
+#include "transport_writer.h"
 
 namespace {
 
@@ -35,10 +38,16 @@ struct Session {
     bool running = false;
     bool usesOpenGL = false;
     bool usesOpenGLES = false;
+    uint64_t frameId = 0;
+    XrTime predictedDisplayTime = 0;
+    XrDuration predictedDisplayPeriod = kDisplayPeriodNs;
+    bool frameWaited = false;
+    bool frameBegun = false;
 };
 
 struct Space {
     uint64_t id = 0;
+    Session* session = nullptr;
     XrReferenceSpaceType type = XR_REFERENCE_SPACE_TYPE_LOCAL;
     XrPosef pose{{0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f}};
 };
@@ -48,6 +57,7 @@ struct Swapchain {
     Session* session = nullptr;
     XrSwapchainCreateInfo createInfo{};
     uint32_t acquiredIndex = 0;
+    uint32_t releasedIndex = 0;
     bool imageAcquired = false;
     std::vector<uint32_t> glImages;
 };
@@ -61,11 +71,22 @@ std::vector<Swapchain*> g_swapchains;
 std::vector<XrEventDataSessionStateChanged> g_events;
 miragebridge::RingReader g_trackingReader;
 bool g_trackingReaderInit = false;
+miragebridge::RingWriter g_clientFrameWriter;
+bool g_clientFrameWriterInit = false;
+std::mutex g_submitMutex;
+std::unique_ptr<miragebridge::SBSFramePacket> g_submitScratch;
 miragebridge::XRPacket g_lastPose{};
 uint64_t g_lastPoseSeq = 0;
+bool g_poseFilterInit = false;
+uint64_t g_poseFilterSeq = UINT64_MAX;
+float g_filteredAngularVel[3] = {};
+float g_filteredLinearVel[3] = {};
 uint64_t g_nextPath = 1;
 std::unordered_map<std::string, XrPath> g_paths;
 std::unordered_map<XrPath, std::string> g_pathNames;
+
+void RefreshPose();
+Swapchain* GetSwapchain(XrSwapchain handle);
 
 uint64_t MonotonicNs() {
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -134,6 +155,106 @@ bool CopyCounted(uint32_t capacity, uint32_t* outCount, uint32_t available, Writ
     return true;
 }
 
+float ClampFloat(float value, float lo, float hi) {
+    return std::max(lo, std::min(hi, value));
+}
+
+XrQuaternionf NormalizeQuat(XrQuaternionf q) {
+    const float len = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+    if (len <= 0.0f || !std::isfinite(len)) {
+        return {0.0f, 0.0f, 0.0f, 1.0f};
+    }
+    q.x /= len;
+    q.y /= len;
+    q.z /= len;
+    q.w /= len;
+    return q;
+}
+
+XrQuaternionf MulQuat(const XrQuaternionf& a, const XrQuaternionf& b) {
+    return NormalizeQuat({
+        a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+        a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+        a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+        a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+    });
+}
+
+XrVector3f RotateVector(const XrQuaternionf& q, const XrVector3f& v) {
+    const XrVector3f u{q.x, q.y, q.z};
+    const XrVector3f uv{
+        u.y * v.z - u.z * v.y,
+        u.z * v.x - u.x * v.z,
+        u.x * v.y - u.y * v.x,
+    };
+    const XrVector3f uuv{
+        u.y * uv.z - u.z * uv.y,
+        u.z * uv.x - u.x * uv.z,
+        u.x * uv.y - u.y * uv.x,
+    };
+    return {
+        v.x + 2.0f * (q.w * uv.x + uuv.x),
+        v.y + 2.0f * (q.w * uv.y + uuv.y),
+        v.z + 2.0f * (q.w * uv.z + uuv.z),
+    };
+}
+
+XrQuaternionf IntegrateAngularVelocity(const XrQuaternionf& base, const float angularVel[3], float dt) {
+    const float wx = angularVel[0];
+    const float wy = angularVel[1];
+    const float wz = angularVel[2];
+    const float speed = std::sqrt(wx * wx + wy * wy + wz * wz);
+    if (speed < 0.00001f || dt <= 0.0f) {
+        return NormalizeQuat(base);
+    }
+
+    const float angle = ClampFloat(speed * dt, -0.35f, 0.35f);
+    const float half = angle * 0.5f;
+    const float s = std::sin(half) / speed;
+    const XrQuaternionf delta{wx * s, wy * s, wz * s, std::cos(half)};
+    return MulQuat(delta, base);
+}
+
+void UpdatePoseFilter() {
+    if (g_poseFilterSeq == g_lastPoseSeq && g_poseFilterInit) {
+        return;
+    }
+    constexpr float alpha = 0.35f;
+    if (!g_poseFilterInit) {
+        std::memcpy(g_filteredAngularVel, g_lastPose.angularVel, sizeof(g_filteredAngularVel));
+        std::memcpy(g_filteredLinearVel, g_lastPose.linearVel, sizeof(g_filteredLinearVel));
+        g_poseFilterInit = true;
+    } else {
+        for (int i = 0; i < 3; ++i) {
+            g_filteredAngularVel[i] = g_filteredAngularVel[i] * (1.0f - alpha) + g_lastPose.angularVel[i] * alpha;
+            g_filteredLinearVel[i] = g_filteredLinearVel[i] * (1.0f - alpha) + g_lastPose.linearVel[i] * alpha;
+        }
+    }
+    g_poseFilterSeq = g_lastPoseSeq;
+}
+
+XrPosef PredictHeadPose(XrTime displayTime) {
+    RefreshPose();
+    UpdatePoseFilter();
+
+    XrPosef out{};
+    out.orientation = NormalizeQuat({g_lastPose.rot[0], g_lastPose.rot[1], g_lastPose.rot[2], g_lastPose.rot[3]});
+    out.position = {g_lastPose.pos[0], g_lastPose.pos[1], g_lastPose.pos[2]};
+
+    const uint64_t sampleNs = g_lastPose.predictedDisplayNs ? g_lastPose.predictedDisplayNs : g_lastPose.monotonicNs;
+    const uint64_t targetNs = displayTime > 0
+        ? static_cast<uint64_t>(displayTime)
+        : (g_lastPose.predictedDisplayNs ? g_lastPose.predictedDisplayNs : MonotonicNs() + kDisplayPeriodNs);
+    float dt = static_cast<float>((static_cast<int64_t>(targetNs) - static_cast<int64_t>(sampleNs)) * 1e-9);
+    dt = ClampFloat(dt, -0.01f, 0.05f);
+
+    out.orientation = IntegrateAngularVelocity(out.orientation, g_filteredAngularVel, dt);
+    for (int i = 0; i < 3; ++i) {
+        (&out.position.x)[i] += g_filteredLinearVel[i] * dt;
+    }
+    return out;
+}
+
 void PushSessionState(Session* session, XrSessionState state) {
     if (!session) {
         return;
@@ -192,11 +313,13 @@ void RefreshPose() {
     }
 }
 
-void FillPoseFromPacket(uint32_t eye, XrPosef* pose, XrFovf* fov) {
-    RefreshPose();
+void FillPoseFromPacket(uint32_t eye, XrTime displayTime, XrPosef* pose, XrFovf* fov) {
+    *pose = PredictHeadPose(displayTime);
     const float eyeOffset = g_lastPose.eyes[eye].view[3] != 0.0f ? g_lastPose.eyes[eye].view[3] : (eye == 0 ? -0.032f : 0.032f);
-    pose->orientation = {g_lastPose.rot[0], g_lastPose.rot[1], g_lastPose.rot[2], g_lastPose.rot[3]};
-    pose->position = {g_lastPose.pos[0] + eyeOffset, g_lastPose.pos[1], g_lastPose.pos[2]};
+    const XrVector3f rotatedEye = RotateVector(pose->orientation, {eyeOffset, 0.0f, 0.0f});
+    pose->position.x += rotatedEye.x;
+    pose->position.y += rotatedEye.y;
+    pose->position.z += rotatedEye.z;
     fov->angleLeft = g_lastPose.eyes[eye].fov[0] != 0.0f ? g_lastPose.eyes[eye].fov[0] : -0.75f;
     fov->angleRight = g_lastPose.eyes[eye].fov[1] != 0.0f ? g_lastPose.eyes[eye].fov[1] : 0.75f;
     fov->angleUp = g_lastPose.eyes[eye].fov[2] != 0.0f ? g_lastPose.eyes[eye].fov[2] : 0.75f;
@@ -207,8 +330,18 @@ using PFN_glGenTextures = void (*)(int, uint32_t*);
 using PFN_glBindTexture = void (*)(uint32_t, uint32_t);
 using PFN_glTexParameteri = void (*)(uint32_t, uint32_t, int);
 using PFN_glTexImage2D = void (*)(uint32_t, int, int, int, int, int, uint32_t, uint32_t, const void*);
+using PFN_glGenFramebuffers = void (*)(int, uint32_t*);
+using PFN_glBindFramebuffer = void (*)(uint32_t, uint32_t);
+using PFN_glFramebufferTexture2D = void (*)(uint32_t, uint32_t, uint32_t, uint32_t, int);
+using PFN_glCheckFramebufferStatus = uint32_t (*)(uint32_t);
+using PFN_glReadPixels = void (*)(int, int, int, int, uint32_t, uint32_t, void*);
+using PFN_glDeleteFramebuffers = void (*)(int, const uint32_t*);
+using PFN_glPixelStorei = void (*)(uint32_t, int);
 
 constexpr uint32_t GL_TEXTURE_2D_MB = 0x0DE1;
+constexpr uint32_t GL_FRAMEBUFFER_MB = 0x8D40;
+constexpr uint32_t GL_COLOR_ATTACHMENT0_MB = 0x8CE0;
+constexpr uint32_t GL_FRAMEBUFFER_COMPLETE_MB = 0x8CD5;
 constexpr uint32_t GL_TEXTURE_MIN_FILTER_MB = 0x2801;
 constexpr uint32_t GL_TEXTURE_MAG_FILTER_MB = 0x2800;
 constexpr uint32_t GL_TEXTURE_WRAP_S_MB = 0x2802;
@@ -217,6 +350,8 @@ constexpr uint32_t GL_LINEAR_MB = 0x2601;
 constexpr uint32_t GL_CLAMP_TO_EDGE_MB = 0x812F;
 constexpr uint32_t GL_RGBA_MB = 0x1908;
 constexpr uint32_t GL_UNSIGNED_BYTE_MB = 0x1401;
+constexpr uint32_t GL_UNPACK_ALIGNMENT_MB = 0x0CF5;
+constexpr uint32_t GL_PACK_ALIGNMENT_MB = 0x0D05;
 constexpr int GL_RGBA8_MB = 0x8058;
 constexpr int GL_SRGB8_ALPHA8_MB = 0x8C43;
 
@@ -245,6 +380,161 @@ bool CreateOpenGLTexture(uint32_t width, uint32_t height, int64_t format, uint32
     return tex != 0;
 }
 
+bool EnsureClientFrameWriter() {
+    std::lock_guard<std::mutex> lock(g_submitMutex);
+    if (g_clientFrameWriterInit) {
+        return true;
+    }
+    const auto cfg = miragebridge::DefaultConfig();
+    g_clientFrameWriterInit = g_clientFrameWriter.Create(cfg.clientFrameName, cfg.clientFrameSlots, sizeof(miragebridge::SBSFramePacket));
+    if (!g_submitScratch) {
+        g_submitScratch = std::make_unique<miragebridge::SBSFramePacket>();
+    }
+    if (!g_clientFrameWriterInit) {
+        Logf("client frame ring unavailable: %s", cfg.clientFrameName);
+    }
+    return g_clientFrameWriterInit;
+}
+
+void FillFallbackEye(uint32_t eye, miragebridge::SBSFramePacket* frame) {
+    if (!frame) {
+        return;
+    }
+    const uint32_t halfWidth = frame->header.sbsWidth / 2;
+    const uint32_t xBase = eye == 0 ? 0 : halfWidth;
+    const uint8_t r = eye == 0 ? 32 : 8;
+    const uint8_t b = eye == 0 ? 8 : 32;
+    for (uint32_t y = 0; y < frame->header.sbsHeight; ++y) {
+        for (uint32_t x = 0; x < halfWidth; ++x) {
+            const size_t idx = static_cast<size_t>(y) * frame->header.strideBytes + static_cast<size_t>(xBase + x) * 4;
+            frame->payload[idx + 0] = static_cast<uint8_t>(r + ((x + y) & 0x1f));
+            frame->payload[idx + 1] = 16;
+            frame->payload[idx + 2] = static_cast<uint8_t>(b + ((x + y) & 0x1f));
+            frame->payload[idx + 3] = 255;
+        }
+    }
+}
+
+bool ReadTextureRectToSbs(uint32_t texture,
+                          const XrRect2Di& rect,
+                          uint32_t eye,
+                          miragebridge::SBSFramePacket* frame) {
+    if (!texture || !frame || rect.extent.width <= 0 || rect.extent.height <= 0) {
+        return false;
+    }
+
+    auto genFramebuffers = reinterpret_cast<PFN_glGenFramebuffers>(dlsym(RTLD_DEFAULT, "glGenFramebuffers"));
+    auto bindFramebuffer = reinterpret_cast<PFN_glBindFramebuffer>(dlsym(RTLD_DEFAULT, "glBindFramebuffer"));
+    auto framebufferTexture2D = reinterpret_cast<PFN_glFramebufferTexture2D>(dlsym(RTLD_DEFAULT, "glFramebufferTexture2D"));
+    auto checkFramebufferStatus = reinterpret_cast<PFN_glCheckFramebufferStatus>(dlsym(RTLD_DEFAULT, "glCheckFramebufferStatus"));
+    auto readPixels = reinterpret_cast<PFN_glReadPixels>(dlsym(RTLD_DEFAULT, "glReadPixels"));
+    auto deleteFramebuffers = reinterpret_cast<PFN_glDeleteFramebuffers>(dlsym(RTLD_DEFAULT, "glDeleteFramebuffers"));
+    auto pixelStorei = reinterpret_cast<PFN_glPixelStorei>(dlsym(RTLD_DEFAULT, "glPixelStorei"));
+    if (!genFramebuffers || !bindFramebuffer || !framebufferTexture2D || !checkFramebufferStatus || !readPixels || !deleteFramebuffers) {
+        return false;
+    }
+
+    uint32_t fbo = 0;
+    genFramebuffers(1, &fbo);
+    bindFramebuffer(GL_FRAMEBUFFER_MB, fbo);
+    framebufferTexture2D(GL_FRAMEBUFFER_MB, GL_COLOR_ATTACHMENT0_MB, GL_TEXTURE_2D_MB, texture, 0);
+    if (checkFramebufferStatus(GL_FRAMEBUFFER_MB) != GL_FRAMEBUFFER_COMPLETE_MB) {
+        deleteFramebuffers(1, &fbo);
+        return false;
+    }
+
+    if (pixelStorei) {
+        pixelStorei(GL_PACK_ALIGNMENT_MB, 1);
+    }
+
+    const uint32_t srcWidth = static_cast<uint32_t>(rect.extent.width);
+    const uint32_t srcHeight = static_cast<uint32_t>(rect.extent.height);
+    std::vector<uint8_t> pixels(static_cast<size_t>(srcWidth) * srcHeight * 4);
+    readPixels(rect.offset.x,
+               rect.offset.y,
+               rect.extent.width,
+               rect.extent.height,
+               GL_RGBA_MB,
+               GL_UNSIGNED_BYTE_MB,
+               pixels.data());
+    deleteFramebuffers(1, &fbo);
+
+    const uint32_t dstHalfWidth = frame->header.sbsWidth / 2;
+    const uint32_t dstWidth = std::min(dstHalfWidth, srcWidth);
+    const uint32_t dstHeight = std::min(frame->header.sbsHeight, srcHeight);
+    const uint32_t xBase = eye == 0 ? 0 : dstHalfWidth;
+    for (uint32_t y = 0; y < dstHeight; ++y) {
+        const uint32_t srcY = srcHeight - y - 1;
+        const auto* src = pixels.data() + (static_cast<size_t>(srcY) * srcWidth * 4);
+        auto* dst = frame->payload + static_cast<size_t>(y) * frame->header.strideBytes + static_cast<size_t>(xBase) * 4;
+        std::memcpy(dst, src, static_cast<size_t>(dstWidth) * 4);
+    }
+    return true;
+}
+
+bool SubmitProjectionLayerToBridge(Session* session, const XrFrameEndInfo* frameEndInfo) {
+    if (!session || !frameEndInfo || !EnsureClientFrameWriter()) {
+        return false;
+    }
+
+    if (frameEndInfo->layerCount > 0 && !frameEndInfo->layers) {
+        return false;
+    }
+
+    const XrCompositionLayerProjection* projection = nullptr;
+    for (uint32_t i = 0; i < frameEndInfo->layerCount; ++i) {
+        const auto* layer = reinterpret_cast<const XrCompositionLayerBaseHeader*>(frameEndInfo->layers[i]);
+        if (layer && layer->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION) {
+            projection = reinterpret_cast<const XrCompositionLayerProjection*>(layer);
+            break;
+        }
+    }
+    if (!projection || projection->viewCount == 0 || !projection->views) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(g_submitMutex);
+    auto& packet = *g_submitScratch;
+    std::memset(&packet, 0, sizeof(packet));
+    packet.header.magic = miragebridge::kProtocolMagic;
+    packet.header.version = miragebridge::kProtocolVersion;
+    packet.header.frameId = session->frameId;
+    packet.header.monotonicNs = MonotonicNs();
+    packet.header.targetDisplayNs = static_cast<uint64_t>(frameEndInfo->displayTime > 0 ? frameEndInfo->displayTime : session->predictedDisplayTime);
+    packet.header.sbsWidth = miragebridge::kSbsWidth;
+    packet.header.sbsHeight = miragebridge::kSbsHeight;
+    packet.header.strideBytes = miragebridge::kSbsWidth * 4;
+    packet.header.format = miragebridge::kBufferPixelFormatRgba8;
+    packet.header.payloadBytes = miragebridge::kSbsBytes;
+
+    bool copiedAnyEye = false;
+    const uint32_t eyeCount = std::min<uint32_t>(projection->viewCount, kViewCount);
+    for (uint32_t eye = 0; eye < eyeCount; ++eye) {
+        auto* swapchain = GetSwapchain(projection->views[eye].subImage.swapchain);
+        bool copied = false;
+        if (swapchain && swapchain->releasedIndex < swapchain->glImages.size()) {
+            copied = ReadTextureRectToSbs(swapchain->glImages[swapchain->releasedIndex],
+                                          projection->views[eye].subImage.imageRect,
+                                          eye,
+                                          &packet);
+        }
+        if (!copied) {
+            FillFallbackEye(eye, &packet);
+        }
+        copiedAnyEye = copiedAnyEye || copied;
+    }
+
+    if (!g_clientFrameWriter.Write(&packet, sizeof(packet))) {
+        Logf("client frame ring write failed");
+        return false;
+    }
+    Logf("submitted frame=%llu copied=%d target=%llu",
+         static_cast<unsigned long long>(packet.header.frameId),
+         copiedAnyEye ? 1 : 0,
+         static_cast<unsigned long long>(packet.header.targetDisplayNs));
+    return true;
+}
+
 Instance* GetInstance(XrInstance handle) {
     return reinterpret_cast<Instance*>(handle);
 }
@@ -267,6 +557,30 @@ XrResult CheckInstance(XrInstance handle) {
 
 XrResult CheckSession(XrSession handle) {
     return handle != XR_NULL_HANDLE && GetSession(handle) ? XR_SUCCESS : XR_ERROR_HANDLE_INVALID;
+}
+
+void DestroySessionLocked(Session* sess) {
+    if (!sess) {
+        return;
+    }
+    for (auto it = g_swapchains.begin(); it != g_swapchains.end();) {
+        if ((*it)->session == sess) {
+            delete *it;
+            it = g_swapchains.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto it = g_spaces.begin(); it != g_spaces.end();) {
+        if ((*it)->session == sess) {
+            delete *it;
+            it = g_spaces.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    g_sessions.erase(std::remove(g_sessions.begin(), g_sessions.end(), sess), g_sessions.end());
+    delete sess;
 }
 
 } // namespace
@@ -382,6 +696,15 @@ XRAPI_ATTR XrResult XRAPI_CALL xrDestroyInstance(XrInstance instance) {
         return XR_ERROR_HANDLE_INVALID;
     }
     std::lock_guard<std::mutex> lock(g_mutex);
+    for (;;) {
+        auto it = std::find_if(g_sessions.begin(), g_sessions.end(), [&](Session* sess) {
+            return sess && sess->instance == inst;
+        });
+        if (it == g_sessions.end()) {
+            break;
+        }
+        DestroySessionLocked(*it);
+    }
     g_instances.erase(std::remove(g_instances.begin(), g_instances.end(), inst), g_instances.end());
     delete inst;
     return XR_SUCCESS;
@@ -459,8 +782,7 @@ XRAPI_ATTR XrResult XRAPI_CALL xrDestroySession(XrSession session) {
         return XR_ERROR_HANDLE_INVALID;
     }
     std::lock_guard<std::mutex> lock(g_mutex);
-    g_sessions.erase(std::remove(g_sessions.begin(), g_sessions.end(), sess), g_sessions.end());
-    delete sess;
+    DestroySessionLocked(sess);
     return XR_SUCCESS;
 }
 
@@ -529,6 +851,7 @@ XRAPI_ATTR XrResult XRAPI_CALL xrCreateReferenceSpace(XrSession session, const X
     }
     auto* out = new Space();
     out->id = g_nextId++;
+    out->session = GetSession(session);
     out->type = createInfo->referenceSpaceType;
     out->pose = createInfo->poseInReferenceSpace;
     std::lock_guard<std::mutex> lock(g_mutex);
@@ -548,17 +871,20 @@ XRAPI_ATTR XrResult XRAPI_CALL xrDestroySpace(XrSpace space) {
     return XR_SUCCESS;
 }
 
-XRAPI_ATTR XrResult XRAPI_CALL xrLocateSpace(XrSpace space, XrSpace, XrTime, XrSpaceLocation* location) {
-    if (!GetSpace(space) || !location) {
+XRAPI_ATTR XrResult XRAPI_CALL xrLocateSpace(XrSpace space, XrSpace, XrTime time, XrSpaceLocation* location) {
+    auto* sp = GetSpace(space);
+    if (!sp || !location) {
         return XR_ERROR_HANDLE_INVALID;
     }
-    RefreshPose();
     location->locationFlags = XR_SPACE_LOCATION_ORIENTATION_VALID_BIT |
                               XR_SPACE_LOCATION_POSITION_VALID_BIT |
                               XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT |
                               XR_SPACE_LOCATION_POSITION_TRACKED_BIT;
-    location->pose.orientation = {g_lastPose.rot[0], g_lastPose.rot[1], g_lastPose.rot[2], g_lastPose.rot[3]};
-    location->pose.position = {g_lastPose.pos[0], g_lastPose.pos[1], g_lastPose.pos[2]};
+    location->pose = PredictHeadPose(time);
+    location->pose.orientation = MulQuat(location->pose.orientation, sp->pose.orientation);
+    location->pose.position.x += sp->pose.position.x;
+    location->pose.position.y += sp->pose.position.y;
+    location->pose.position.z += sp->pose.position.z;
     return XR_SUCCESS;
 }
 
@@ -703,36 +1029,56 @@ XRAPI_ATTR XrResult XRAPI_CALL xrReleaseSwapchainImage(XrSwapchain swapchain, co
     if (!sc) {
         return XR_ERROR_HANDLE_INVALID;
     }
+    sc->releasedIndex = sc->acquiredIndex;
     sc->imageAcquired = false;
     return XR_SUCCESS;
 }
 
 XRAPI_ATTR XrResult XRAPI_CALL xrWaitFrame(XrSession session, const XrFrameWaitInfo*, XrFrameState* frameState) {
-    if (CheckSession(session) != XR_SUCCESS || !frameState) {
+    auto* sess = GetSession(session);
+    if (!sess || !frameState) {
         return XR_ERROR_HANDLE_INVALID;
     }
     RefreshPose();
+    const uint64_t period = g_lastPose.displayHz ? (1000000000ull / g_lastPose.displayHz) : static_cast<uint64_t>(kDisplayPeriodNs);
+    const uint64_t now = MonotonicNs();
+    const uint64_t predicted = g_lastPose.predictedDisplayNs && g_lastPose.predictedDisplayNs > now
+        ? g_lastPose.predictedDisplayNs
+        : now + period;
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    frameState->predictedDisplayTime = static_cast<XrTime>(g_lastPose.predictedDisplayNs ? g_lastPose.predictedDisplayNs : MonotonicNs() + kDisplayPeriodNs);
-    frameState->predictedDisplayPeriod = kDisplayPeriodNs;
+    sess->predictedDisplayTime = static_cast<XrTime>(predicted);
+    sess->predictedDisplayPeriod = static_cast<XrDuration>(period);
+    sess->frameWaited = true;
+    frameState->predictedDisplayTime = sess->predictedDisplayTime;
+    frameState->predictedDisplayPeriod = sess->predictedDisplayPeriod;
     frameState->shouldRender = XR_TRUE;
     return XR_SUCCESS;
 }
 
 XRAPI_ATTR XrResult XRAPI_CALL xrBeginFrame(XrSession session, const XrFrameBeginInfo*) {
-    return CheckSession(session);
+    auto* sess = GetSession(session);
+    if (!sess) {
+        return XR_ERROR_HANDLE_INVALID;
+    }
+    sess->frameBegun = true;
+    return XR_SUCCESS;
 }
 
 XRAPI_ATTR XrResult XRAPI_CALL xrEndFrame(XrSession session, const XrFrameEndInfo* frameEndInfo) {
-    if (CheckSession(session) != XR_SUCCESS) {
+    auto* sess = GetSession(session);
+    if (!sess || !frameEndInfo) {
         return XR_ERROR_HANDLE_INVALID;
     }
+    SubmitProjectionLayerToBridge(sess, frameEndInfo);
+    sess->frameId++;
+    sess->frameWaited = false;
+    sess->frameBegun = false;
     Logf("xrEndFrame layers=%u", frameEndInfo ? frameEndInfo->layerCount : 0);
     return XR_SUCCESS;
 }
 
 XRAPI_ATTR XrResult XRAPI_CALL xrLocateViews(XrSession session,
-                                             const XrViewLocateInfo*,
+                                             const XrViewLocateInfo* viewLocateInfo,
                                              XrViewState* viewState,
                                              uint32_t viewCapacityInput,
                                              uint32_t* viewCountOutput,
@@ -754,7 +1100,7 @@ XRAPI_ATTR XrResult XRAPI_CALL xrLocateViews(XrSession session,
         return XR_ERROR_SIZE_INSUFFICIENT;
     }
     for (uint32_t i = 0; i < kViewCount; ++i) {
-        FillPoseFromPacket(i, &views[i].pose, &views[i].fov);
+        FillPoseFromPacket(i, viewLocateInfo ? viewLocateInfo->displayTime : 0, &views[i].pose, &views[i].fov);
     }
     return XR_SUCCESS;
 }

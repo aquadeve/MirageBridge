@@ -7,7 +7,7 @@
 namespace miragebridge {
 
 constexpr uint32_t kProtocolMagic = 0x4D425247;
-constexpr uint32_t kProtocolVersion = 2;
+constexpr uint32_t kProtocolVersion = 3;
 constexpr uint32_t kMaxEyes = 2;
 constexpr uint32_t kMaxControllers = 2;
 constexpr uint32_t kSbsWidth = 2048;
@@ -22,6 +22,10 @@ constexpr uint32_t kSocketChunkClientFrame = 4;
 constexpr uint32_t kSocketChunkAudio = 5;
 constexpr uint32_t kSocketChunkInput = 6;
 constexpr uint32_t kSocketChunkRuntimeEvent = 7;
+constexpr uint32_t kSocketChunkDeviceConfig = 8;
+constexpr uint32_t kSocketChunkFrameTiming = 9;
+constexpr uint32_t kSocketChunkBufferControl = 10;
+constexpr uint32_t kSocketChunkFrameAck = 11;
 
 constexpr uint32_t kRingKindTracking = 1;
 constexpr uint32_t kRingKindFrame = 2;
@@ -55,6 +59,22 @@ enum RuntimeCommandType : uint32_t {
     kRuntimeCommandHapticPulse = 4,
     kRuntimeCommandSetBitrate = 5,
     kRuntimeCommandSetFramePacing = 6,
+    kRuntimeCommandCreateBuffer = 7,
+    kRuntimeCommandDestroyBuffer = 8,
+    kRuntimeCommandSubmitBuffer = 9,
+};
+
+enum BufferMemoryType : uint32_t {
+    kBufferMemorySocketPayload = 0,
+    kBufferMemoryMmapFd = 1,
+    kBufferMemoryAshmemFd = 2,
+    kBufferMemoryAHardwareBuffer = 3,
+};
+
+enum BufferPixelFormat : uint32_t {
+    kBufferPixelFormatRgba8 = 1,
+    kBufferPixelFormatBgra8 = 2,
+    kBufferPixelFormatRgbx8 = 3,
 };
 
 #pragma pack(push, 1)
@@ -98,6 +118,7 @@ struct SBSFrameHeader {
     uint32_t version;
     uint64_t frameId;
     uint64_t monotonicNs;
+    uint64_t targetDisplayNs;
     uint32_t sbsWidth;
     uint32_t sbsHeight;
     uint32_t strideBytes;
@@ -154,6 +175,55 @@ struct RuntimeCommandPacket {
     uint64_t monotonicNs;
     uint32_t type;
     uint32_t payloadBytes;
+};
+
+struct DeviceConfigPacket {
+    uint32_t magic;
+    uint32_t version;
+    uint64_t monotonicNs;
+    uint32_t displayWidth;
+    uint32_t displayHeight;
+    uint32_t displayHz;
+    uint32_t eyeWidth;
+    uint32_t eyeHeight;
+    float ipdMeters;
+    float fov[kMaxEyes][4];
+    uint32_t maxFramesInFlight;
+    uint32_t preferredMemoryType;
+};
+
+struct FrameTimingPacket {
+    uint32_t magic;
+    uint32_t version;
+    uint64_t frameId;
+    uint64_t monotonicNs;
+    uint64_t predictedDisplayNs;
+    uint64_t displayPeriodNs;
+    uint32_t maxFramesInFlight;
+    uint32_t queuedFrameCount;
+};
+
+struct BufferControlPacket {
+    uint32_t magic;
+    uint32_t version;
+    uint64_t commandId;
+    uint64_t bufferId;
+    uint32_t commandType;
+    uint32_t memoryType;
+    uint32_t width;
+    uint32_t height;
+    uint32_t strideBytes;
+    uint32_t format;
+    uint32_t payloadBytes;
+};
+
+struct FrameAckPacket {
+    uint32_t magic;
+    uint32_t version;
+    uint64_t frameId;
+    uint64_t monotonicNs;
+    uint32_t accepted;
+    uint32_t queuedFrameCount;
 };
 
 struct SocketChunkHeader {

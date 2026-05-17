@@ -20,6 +20,8 @@ namespace miragebridge {
 namespace {
 
 std::atomic<bool> g_running{false};
+std::atomic<int> g_surfaceWidth{1};
+std::atomic<int> g_surfaceHeight{1};
 std::thread g_trackingThread;
 std::thread g_renderThread;
 GvrTrackingAdapter g_tracking;
@@ -73,8 +75,13 @@ void RenderLoop() {
     uint64_t frameId = 0;
     auto nextWake = std::chrono::steady_clock::now();
     auto frame = std::make_unique<SBSFramePacket>();
+    auto clientFrame = std::make_unique<SBSFramePacket>();
     while (g_running.load(std::memory_order_relaxed)) {
         MaybeSendSharedMemoryHandles();
+        while (g_socketFallback.PollClientFrame(clientFrame.get())) {
+            g_renderer.SubmitClientFrame(*clientFrame);
+            g_diag.MarkSubmit(clientFrame->header.monotonicNs);
+        }
         if (g_renderer.RenderAndPack(frameId++, frame.get())) {
             if (g_transport.IsReady()) {
                 g_transport.PushFrame(*frame);
@@ -133,6 +140,20 @@ void StopBridge() {
     g_transport.Shutdown();
     g_socketFallback.Shutdown();
     MB_LOGI("MirageBridge stopped");
+}
+
+void OnDisplaySurfaceCreated() {
+    MB_LOGI("Display surface created");
+}
+
+void OnDisplaySurfaceChanged(int width, int height) {
+    g_surfaceWidth.store(width > 0 ? width : 1, std::memory_order_release);
+    g_surfaceHeight.store(height > 0 ? height : 1, std::memory_order_release);
+}
+
+void DrawDisplayFrame() {
+    g_renderer.DrawLatestFrameToCurrentContext(static_cast<uint32_t>(g_surfaceWidth.load(std::memory_order_acquire)),
+                                               static_cast<uint32_t>(g_surfaceHeight.load(std::memory_order_acquire)));
 }
 
 }

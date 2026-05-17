@@ -31,7 +31,19 @@ bool RingWriter::Create(const char* name, uint32_t slotCount, uint32_t slotSize)
 
     header_ = reinterpret_cast<RingHeader*>(map_);
     payload_ = reinterpret_cast<uint8_t*>(map_) + sizeof(RingHeader);
-    const uint32_t kind = slotSize == sizeof(XRPacket) ? kRingKindTracking : kRingKindFrame;
+    const auto cfg = DefaultConfig();
+    uint32_t kind = kRingKindFrame;
+    if (slotSize == sizeof(XRPacket)) {
+        kind = kRingKindTracking;
+    } else if (slotSize == sizeof(SBSFramePacket) && std::strcmp(name, cfg.clientFrameName) == 0) {
+        kind = kRingKindClientFrame;
+    } else if (slotSize == sizeof(AudioPacket) && std::strcmp(name, cfg.audioInName) == 0) {
+        kind = kRingKindAudioIn;
+    } else if (slotSize == sizeof(AudioPacket)) {
+        kind = kRingKindAudioOut;
+    } else if (slotSize == sizeof(RuntimeEventPacket)) {
+        kind = kRingKindRuntimeEvent;
+    }
     InitializeRing(map_, kind, slotCount, slotSize);
     return true;
 }

@@ -1,8 +1,14 @@
 # Protocol
 
+## Version
+
+Current protocol version: `3`.
+
+Version `3` adds bidirectional runtime frame submission over `@miragebridge.termux`, target display timestamps in `SBSFrameHeader`, explicit device/timing/buffer-control packet layouts, and ring overwrite diagnostics.
+
 ## Rings
 
-MirageBridge uses two ring buffers:
+MirageBridge uses fixed-size shared-memory rings:
 
 - Tracking ring: `XRPacket`, 512 slots by default.
 - Frame ring: `SBSFramePacket`, 8 slots by default.
@@ -10,7 +16,7 @@ MirageBridge uses two ring buffers:
 - Audio out/in rings: `AudioPacket`, 64 slots by default.
 - Runtime event ring: `RuntimeEventPacket`, 128 slots by default.
 
-Android owns the first copy of headset-originated rings in `ASharedMemory`/ashmem. Termux receives those FDs and mirrors the latest data into POSIX shared memory so independent Termux processes can open them with `shm_open`. Client-originated rings are created by the SDK/daemon in POSIX shm and are reserved for frame/audio/input submission back to the Android service.
+Android owns the first copy of headset-originated rings in `ASharedMemory`/ashmem. Termux receives those FDs and mirrors the latest data into POSIX shared memory so independent Termux processes can open them with `shm_open`. Client-originated rings are created by the SDK/OpenXR runtime in POSIX shm. `miragebridge-daemon` reads the newest client frame and forwards it to Android over the control socket, which avoids requiring Android to `shm_open` proot-side objects.
 
 ## Ring Header
 
@@ -55,8 +61,9 @@ Matrices are stored row-major to match GVR's `gvr_mat4f`. OpenGL users should tr
 - default dimensions: `2048 x 1024`
 - left eye: left half
 - right eye: right half
+- target display timestamp, filled from OpenXR `xrEndFrame.displayTime` or SDK frame timing
 
-The current prototype reads pixels back into shared memory. A future zero-copy path should replace this with `AHardwareBuffer`/`EGLImageKHR` export once the receiving compositor path is ready.
+The current OpenXR path reads projection-layer GL/GLES swapchain textures back into the client frame ring. A future zero-copy path should replace this with `AHardwareBuffer`/`EGLImageKHR` export once the receiving compositor path is ready.
 
 ## Socket Control Channel
 
@@ -75,6 +82,10 @@ Message types:
 - `kSocketChunkAudio`: PCM audio chunks.
 - `kSocketChunkInput`: input/haptic commands.
 - `kSocketChunkRuntimeEvent`: runtime events.
+- `kSocketChunkDeviceConfig`: headset display/FOV/IPD/config metadata.
+- `kSocketChunkFrameTiming`: vsync-aligned timing hints owned by Android.
+- `kSocketChunkBufferControl`: buffer create/destroy/submit metadata for future fd/AHardwareBuffer paths.
+- `kSocketChunkFrameAck`: backpressure/queue acknowledgement.
 
 The control socket uses `SOCK_SEQPACKET` so each control/chunk message is preserved as a packet. Shared-memory FDs are transferred with `SCM_RIGHTS`.
 
@@ -88,5 +99,8 @@ The control socket uses `SOCK_SEQPACKET` so each control/chunk message is preser
 - `kRuntimeCommandHapticPulse`
 - `kRuntimeCommandSetBitrate`
 - `kRuntimeCommandSetFramePacing`
+- `kRuntimeCommandCreateBuffer`
+- `kRuntimeCommandDestroyBuffer`
+- `kRuntimeCommandSubmitBuffer`
 
-The current SDK writes raw submitted SBS frames to `/miragebridge_client_frames` and PCM audio to `/miragebridge_audio_out`. Android-side consumption is the next backend step.
+The current SDK/OpenXR runtime writes raw submitted SBS frames to `/miragebridge_client_frames` and PCM audio to `/miragebridge_audio_out`. The daemon now forwards `/miragebridge_client_frames` to Android as `kSocketChunkClientFrame`; Android keeps only the latest complete frame for display.

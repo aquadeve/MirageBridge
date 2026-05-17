@@ -20,8 +20,9 @@ int main() {
     for (;;) {
         if (reader.ReadLatest(frame.get(), sizeof(*frame), &seq)) {
             const auto& header = frame->header;
-            std::printf("frame=%llu dims=%ux%u stride=%u payload=%u px0=%u,%u,%u,%u\n",
+            std::printf("frame=%llu target=%llu dims=%ux%u stride=%u payload=%u px0=%u,%u,%u,%u\n",
                 static_cast<unsigned long long>(header.frameId),
+                static_cast<unsigned long long>(header.targetDisplayNs),
                 header.sbsWidth,
                 header.sbsHeight,
                 header.strideBytes,

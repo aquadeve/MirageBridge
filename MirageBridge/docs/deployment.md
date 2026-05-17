@@ -37,6 +37,27 @@ cmake --build termux/build -j
 ctest --test-dir termux/build --output-on-failure
 ```
 
+## proot Ubuntu Runtime
+
+Install the Termux prerequisites and Ubuntu rootfs:
+
+```bash
+pkg install proot-distro cmake clang make
+proot-distro install ubuntu
+```
+
+Launch the proot build/runtime shell:
+
+```bash
+bash scripts/launch-proot-runtime.sh
+```
+
+The launcher enters Ubuntu, builds the Termux runtime targets, exports `XR_RUNTIME_JSON`, and starts `miragebridge-daemon` on `@miragebridge.termux`. Pass a command after the script to run an OpenXR app directly:
+
+```bash
+bash scripts/launch-proot-runtime.sh hello_xr -g OpenGLES
+```
+
 ## Install And Run
 
 Install and launch:
@@ -114,7 +135,7 @@ nm -D termux/build/openxr-shim/libopenxr_mirage.so | grep xrNegotiateLoaderRunti
 openxr_runtime_list
 ```
 
-Current support is intentionally minimal: loader negotiation, instance/session lifecycle, stereo view configuration, reference spaces, OpenGL/OpenGL ES swapchain image handles, frame pacing, view location, and action stubs for hello_xr bring-up. Real compositor presentation, controller actions, Vulkan, and client frame transport into the Android Daydream compositor remain future backend work.
+Current support includes loader negotiation, instance/session lifecycle, stereo view configuration, reference spaces, OpenGL/OpenGL ES swapchain image handles, frame pacing, predicted view location, and projection-layer SBS submission back to Android. Controller action mapping, Vulkan, zero-copy buffers, and Android-side lens distortion/reprojection remain future backend work.
 
 ## Non-OpenXR SDK
 

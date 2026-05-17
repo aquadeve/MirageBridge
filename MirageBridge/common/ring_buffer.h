@@ -68,6 +68,10 @@ inline bool RingWrite(RingHeader* header, uint8_t* payload, const void* data, si
     }
 
     const uint64_t sequence = header->writeSeq.load(std::memory_order_relaxed);
+    const uint64_t readSeq = header->readSeq.load(std::memory_order_acquire);
+    if (sequence >= readSeq + header->slotCount) {
+        header->droppedWrites.fetch_add(1, std::memory_order_relaxed);
+    }
     RingSlotHeader* slot = RingSlot(header, payload, sequence);
     const uint64_t begin = sequence * 2 + 1;
     const uint64_t end = sequence * 2 + 2;

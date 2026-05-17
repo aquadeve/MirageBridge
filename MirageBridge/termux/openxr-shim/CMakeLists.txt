@@ -10,7 +10,7 @@ target_link_libraries(openxr_mirage
 
 target_include_directories(openxr_mirage PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../../monado-referenceOnly/src/external/openxr_includes
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../monado/src/external/openxr_includes
 )
 
 if(UNIX)

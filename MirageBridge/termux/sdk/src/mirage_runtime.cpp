@@ -325,7 +325,7 @@ MBR_API mbr_result mbr_runtime_get_latest_sbs_frame(mbr_runtime* runtime,
         std::memcpy(pixel_buffer, packet.payload, bytes);
     }
     out_desc->frame_id = packet.header.frameId;
-    out_desc->target_display_ns = packet.header.monotonicNs;
+    out_desc->target_display_ns = packet.header.targetDisplayNs ? packet.header.targetDisplayNs : packet.header.monotonicNs;
     out_desc->width = packet.header.sbsWidth;
     out_desc->height = packet.header.sbsHeight;
     out_desc->stride_bytes = packet.header.strideBytes;
@@ -358,6 +358,7 @@ MBR_API mbr_result mbr_runtime_submit_sbs_frame(mbr_runtime* runtime, const mbr_
     packet.header.version = miragebridge::kProtocolVersion;
     packet.header.frameId = frame->frame_id;
     packet.header.monotonicNs = MonotonicNs();
+    packet.header.targetDisplayNs = frame->target_display_ns;
     packet.header.sbsWidth = frame->width;
     packet.header.sbsHeight = frame->height;
     packet.header.strideBytes = stride;

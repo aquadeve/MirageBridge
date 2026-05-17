@@ -1,6 +1,6 @@
 # OpenXR Runtime Bring-Up
 
-`libopenxr_mirage.so` is a minimal OpenXR runtime for loader compatibility and hello_xr bring-up. It is not the primary MirageBridge application API; native apps should still prefer `mirage_runtime` or the Luau module when they do not need OpenXR.
+`libopenxr_mirage.so` is the proot-side OpenXR runtime. It keeps a Monado-style split between OpenXR state tracking, device/pose data, and compositor submission, but routes all hardware-facing work through MirageBridge on Android.
 
 ## Loader ABI
 
@@ -49,7 +49,7 @@ xrEndFrame
 xrLocateViews
 ```
 
-It also exposes OpenGL/OpenGL ES graphics requirement functions, path helpers, result/type string helpers, and no-op action APIs so simple samples avoid immediate `XR_ERROR_FUNCTION_UNSUPPORTED` failures.
+It also exposes OpenGL/OpenGL ES graphics requirement functions, path helpers, result/type string helpers, and placeholder action APIs so simple samples avoid immediate `XR_ERROR_FUNCTION_UNSUPPORTED` failures.
 
 ## Manifest
 
@@ -95,14 +95,16 @@ Expected value on Mirage Solo/Termux is `AArch64`. Host Linux compile tests may 
 
 - System: one HMD system with primary stereo view configuration.
 - Tracking: reads `/miragebridge_tracking`; falls back to identity orientation at standing height when the Android service is not connected.
-- Timing: reports a 72 Hz predicted display period.
+- Prediction: smooths angular/linear velocities and predicts poses at the `xrLocateViews` display time, using Android/GVR prediction as the authoritative base sample.
+- Timing: follows MirageBridge display metadata when present and otherwise reports a 72 Hz predicted display period.
 - Swapchains: returns OpenGL/OpenGL ES texture ids. If no GL context is current during smoke tests, placeholder ids are returned so lifecycle tests can proceed.
+- Compositor submission: `xrEndFrame` finds the projection layer, reads released eye textures into an SBS frame packet, writes `/miragebridge_client_frames`, and lets `miragebridge-daemon` forward the newest frame to Android over `@miragebridge.termux`.
 - Events: emits READY after session creation, FOCUSED after begin session, and STOPPING/IDLE during end-session flow.
 
 ## Remaining Work
 
-- Real OpenGL ES texture ownership and import/export on Termux.
-- Android Daydream compositor submission instead of local placeholder swapchain ownership.
+- Zero-copy OpenGL ES texture ownership/import/export on Termux via AHardwareBuffer or EGL external images.
+- Lens distortion/reprojection in the Android compositor path.
 - Controller action state mapped from MirageBridge controller packets.
 - Vulkan graphics binding and external memory paths.
 - Runtime conformance, loader edge-case validation, and robust multi-instance cleanup.

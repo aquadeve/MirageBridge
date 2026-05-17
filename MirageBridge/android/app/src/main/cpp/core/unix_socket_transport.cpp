@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <vector>
 
 #define MB_LOG_TAG "MirageBridgeSock"
@@ -101,6 +102,7 @@ bool UnixSocketTransport::SendSharedMemoryHandles(int trackingFd,
                                                   size_t frameSize,
                                                   uint32_t trackingSlots,
                                                   uint32_t frameSlots) {
+    std::lock_guard<std::mutex> lock(ioMutex_);
     if (trackingFd < 0 || frameFd < 0 || !EnsureConnected()) {
         return false;
     }
@@ -152,6 +154,7 @@ void UnixSocketTransport::SendFrame(const SBSFramePacket& frame) {
 }
 
 bool UnixSocketTransport::SendPacketChunks(uint32_t type, const void* data, size_t size) {
+    std::lock_guard<std::mutex> lock(ioMutex_);
     if (!data || size == 0 || !EnsureConnected()) {
         return false;
     }
@@ -196,6 +199,111 @@ bool UnixSocketTransport::SendRaw(const void* data, size_t size) {
         return false;
     }
     return true;
+}
+
+bool UnixSocketTransport::HandleIncomingPacket(const std::vector<uint8_t>& packet, SBSFramePacket* outFrame) {
+    if (!outFrame || packet.size() < sizeof(SocketPayloadHeader)) {
+        return false;
+    }
+
+    SocketPayloadHeader header{};
+    std::memcpy(&header, packet.data(), sizeof(header));
+    if (header.magic != kSocketChunkMagic ||
+        header.version != kProtocolVersion ||
+        header.headerBytes != sizeof(SocketPayloadHeader) ||
+        packet.size() < sizeof(SocketPayloadHeader) + header.payloadBytes) {
+        return false;
+    }
+    if (header.type != kSocketChunkClientFrame) {
+        return false;
+    }
+    if (header.totalBytes != sizeof(SBSFramePacket)) {
+        incomingBytes_.clear();
+        incomingMessageId_ = 0;
+        incomingType_ = 0;
+        incomingTotalBytes_ = 0;
+        return false;
+    }
+    if (incomingMessageId_ != header.messageId || incomingType_ != header.type) {
+        incomingMessageId_ = header.messageId;
+        incomingType_ = header.type;
+        incomingTotalBytes_ = static_cast<size_t>(header.totalBytes);
+        incomingBytes_.assign(incomingTotalBytes_, 0);
+    }
+    if (static_cast<size_t>(header.offset) + header.payloadBytes > incomingBytes_.size()) {
+        incomingBytes_.clear();
+        incomingMessageId_ = 0;
+        incomingType_ = 0;
+        incomingTotalBytes_ = 0;
+        return false;
+    }
+
+    std::memcpy(incomingBytes_.data() + header.offset,
+                packet.data() + sizeof(SocketPayloadHeader),
+                header.payloadBytes);
+    if (static_cast<size_t>(header.offset) + header.payloadBytes < incomingTotalBytes_) {
+        return false;
+    }
+
+    std::memcpy(outFrame, incomingBytes_.data(), sizeof(SBSFramePacket));
+    incomingBytes_.clear();
+    incomingMessageId_ = 0;
+    incomingType_ = 0;
+    incomingTotalBytes_ = 0;
+    return outFrame->header.magic == kProtocolMagic && outFrame->header.version == kProtocolVersion;
+}
+
+bool UnixSocketTransport::PollClientFrame(SBSFramePacket* outFrame) {
+    std::lock_guard<std::mutex> lock(ioMutex_);
+    if (!outFrame || !EnsureConnected()) {
+        return false;
+    }
+
+    for (uint32_t attempt = 0; attempt < 256; ++attempt) {
+        std::vector<uint8_t> packet(kSocketMaxPayload + sizeof(SocketPayloadHeader) + 256, 0);
+        char control[CMSG_SPACE(sizeof(int) * 4)];
+        std::memset(control, 0, sizeof(control));
+
+        iovec iov{};
+        iov.iov_base = packet.data();
+        iov.iov_len = packet.size();
+
+        msghdr mh{};
+        mh.msg_iov = &iov;
+        mh.msg_iovlen = 1;
+        mh.msg_control = control;
+        mh.msg_controllen = sizeof(control);
+
+        const ssize_t n = recvmsg(sock_, &mh, MSG_DONTWAIT);
+        if (n < 0) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                MB_LOGE("recv client frame failed errno=%d", errno);
+                Shutdown();
+            }
+            return false;
+        }
+        if (n == 0) {
+            Shutdown();
+            return false;
+        }
+
+        for (cmsghdr* cmsg = CMSG_FIRSTHDR(&mh); cmsg; cmsg = CMSG_NXTHDR(&mh, cmsg)) {
+            if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS) {
+                const size_t bytes = cmsg->cmsg_len - CMSG_LEN(0);
+                const size_t count = bytes / sizeof(int);
+                const int* fds = reinterpret_cast<const int*>(CMSG_DATA(cmsg));
+                for (size_t i = 0; i < count; ++i) {
+                    close(fds[i]);
+                }
+            }
+        }
+
+        packet.resize(static_cast<size_t>(n));
+        if (HandleIncomingPacket(packet, outFrame)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 }

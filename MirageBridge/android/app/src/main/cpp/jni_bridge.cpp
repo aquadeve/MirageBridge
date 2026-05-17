@@ -29,3 +29,18 @@ Java_com_miragebridge_MirageBridgeService_nativeStop(JNIEnv*, jobject) {
     StopBridge();
     MB_LOGI("nativeStop");
 }
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_miragebridge_MainActivity_nativeOnSurfaceCreated(JNIEnv*, jobject) {
+    OnDisplaySurfaceCreated();
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_miragebridge_MainActivity_nativeOnSurfaceChanged(JNIEnv*, jobject, jint width, jint height) {
+    OnDisplaySurfaceChanged(width, height);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_miragebridge_MainActivity_nativeDrawFrame(JNIEnv*, jobject) {
+    DrawDisplayFrame();
+}

@@ -15,9 +15,14 @@
 #include <vector>
 
 #include "ring_buffer.h"
+#include "transport_reader.h"
 #include "transport_writer.h"
 
 using namespace miragebridge;
+
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
 
 namespace {
 
@@ -202,6 +207,79 @@ bool ReceivePacket(int fd, std::vector<uint8_t>* bytes, std::vector<int>* fds) {
     return true;
 }
 
+bool SendRaw(int fd, const void* data, size_t size) {
+    if (fd < 0 || !data || size == 0) {
+        return false;
+    }
+    const ssize_t written = send(fd, data, size, MSG_NOSIGNAL);
+    return written == static_cast<ssize_t>(size);
+}
+
+bool SendPacketChunks(int fd, uint32_t type, const void* data, size_t size, uint64_t* nextMessageId) {
+    if (fd < 0 || !data || size == 0 || !nextMessageId) {
+        return false;
+    }
+    const auto* bytes = reinterpret_cast<const uint8_t*>(data);
+    const uint64_t id = (*nextMessageId)++;
+    size_t offset = 0;
+    while (offset < size) {
+        const uint32_t chunk = static_cast<uint32_t>(std::min<size_t>(kSocketMaxPayload, size - offset));
+        SocketPayloadHeader header{};
+        header.magic = kSocketChunkMagic;
+        header.type = type;
+        header.version = kProtocolVersion;
+        header.headerBytes = sizeof(SocketPayloadHeader);
+        header.messageId = id;
+        header.totalBytes = size;
+        header.offset = static_cast<uint32_t>(offset);
+        header.payloadBytes = chunk;
+
+        std::vector<uint8_t> packet(sizeof(header) + chunk);
+        std::memcpy(packet.data(), &header, sizeof(header));
+        std::memcpy(packet.data() + sizeof(header), bytes + offset, chunk);
+        if (!SendRaw(fd, packet.data(), packet.size())) {
+            return false;
+        }
+        offset += chunk;
+    }
+    return true;
+}
+
+bool MirrorClientFrameToAndroid(int client,
+                                RingReader* clientFrames,
+                                bool* clientFramesOpen,
+                                uint64_t* lastClientFrameSeq,
+                                SBSFramePacket* scratch,
+                                uint64_t* nextMessageId) {
+    if (!clientFrames || !clientFramesOpen || !lastClientFrameSeq || !scratch || !nextMessageId) {
+        return true;
+    }
+
+    if (!*clientFramesOpen) {
+        const auto cfg = DefaultConfig();
+        *clientFramesOpen = clientFrames->Open(cfg.clientFrameName, sizeof(SBSFramePacket));
+        if (!*clientFramesOpen) {
+            return true;
+        }
+        *lastClientFrameSeq = UINT64_MAX;
+        std::printf("opened client frame ring %s\n", cfg.clientFrameName);
+    }
+
+    uint64_t seq = 0;
+    if (!clientFrames->ReadLatest(scratch, sizeof(*scratch), &seq)) {
+        return true;
+    }
+    if (seq == *lastClientFrameSeq) {
+        return true;
+    }
+    *lastClientFrameSeq = seq;
+    if (scratch->header.magic != kProtocolMagic || scratch->header.version != kProtocolVersion) {
+        return true;
+    }
+
+    return SendPacketChunks(client, kSocketChunkClientFrame, scratch, sizeof(*scratch), nextMessageId);
+}
+
 void HandlePayloadChunk(const std::vector<uint8_t>& packet,
                         ChunkAccumulator* accumulator,
                         RingWriter* tracking,
@@ -285,12 +363,25 @@ int main() {
 
         RemoteRing remoteTracking;
         RemoteRing remoteFrames;
+        RingReader clientFrames;
+        bool clientFramesOpen = false;
+        uint64_t lastClientFrameSeq = UINT64_MAX;
+        uint64_t nextOutgoingMessageId = 1;
         ChunkAccumulator accumulator;
 
         bool connected = true;
         while (connected) {
             MirrorTracking(&remoteTracking, &tracking);
             MirrorFrame(&remoteFrames, &frames, frameScratch.get());
+            if (!MirrorClientFrameToAndroid(client,
+                                            &clientFrames,
+                                            &clientFramesOpen,
+                                            &lastClientFrameSeq,
+                                            frameScratch.get(),
+                                            &nextOutgoingMessageId)) {
+                connected = false;
+                break;
+            }
 
             pollfd pfd{};
             pfd.fd = client;
@@ -341,6 +432,7 @@ int main() {
         }
 
         std::printf("android bridge disconnected\n");
+        clientFrames.Close();
         CloseRemote(&remoteTracking);
         CloseRemote(&remoteFrames);
         close(client);
