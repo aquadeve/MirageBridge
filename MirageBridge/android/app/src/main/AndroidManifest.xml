@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <uses-feature android:name="android.hardware.vr.headtracking" android:required="false" />
+    <uses-feature
+        android:name="android.hardware.vr.headtracking"
+        android:version="1"
+        android:required="false" />
     <uses-feature android:name="android.hardware.vr.high_performance" android:required="false" />
     <uses-feature android:name="android.software.vr.mode" android:required="false" />
     <uses-feature android:name="android.hardware.sensor.gyroscope" android:required="true" />
@@ -13,7 +16,8 @@
     <application
         android:allowBackup="false"
         android:label="MirageBridge"
-        android:supportsRtl="false">
+        android:supportsRtl="false"
+        android:theme="@style/VrActivityTheme">
 
         <service
             android:name=".MirageBridgeService"
@@ -23,10 +27,16 @@
 
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:configChanges="orientation|keyboardHidden|screenSize|uiMode|navigation|density"
+            android:enableVrMode="@string/gvr_vr_mode_component"
+            android:exported="true"
+            android:resizeableActivity="false"
+            android:screenOrientation="landscape">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="com.google.intent.category.DAYDREAM" />
+                <category android:name="com.google.intent.category.CARDBOARD" />
             </intent-filter>
         </activity>
 

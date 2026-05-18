@@ -10,8 +10,11 @@ ANDROID_SDK_ROOT=/home/kantz/Android/Sdk ANDROID_HOME=/home/kantz/Android/Sdk ba
 The Android project extracts local GVR headers and `libgvr.so` from:
 
 ```text
-../gvr-android-sdk/libraries/sdk-base-1.200.0.aar
+../gvr-android-sdk/libraries/sdk-base-1.190.0.aar
 ```
+
+The app intentionally stays on GVR SDK `1.190.0` for Lenovo Mirage Solo firmware with
+VRCore/Daydream OS-era services, including VRCore `1.23.283897185.release_aio`.
 
 The APK is produced at:
 
