@@ -15,6 +15,11 @@ The Android project extracts local GVR headers and `libgvr.so` from:
 
 The app intentionally stays on GVR SDK `1.190.0` for Lenovo Mirage Solo firmware with
 VRCore/Daydream OS-era services, including VRCore `1.23.283897185.release_aio`.
+It launches as a normal Android fullscreen app instead of a Daydream activity, and
+keeps `GvrLayout` stereo mode disabled so the old VRCore service is not asked to run
+the SDK `prepareVr()` compatibility gate. Android-side display output is a normal
+fullscreen `GLSurfaceView`; MirageBridge does not request GVR async reprojection in
+this compatibility mode.
 
 The APK is produced at:
 
